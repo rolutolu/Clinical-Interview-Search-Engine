@@ -1,0 +1,39 @@
+# Environment
+.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Audio files (don't commit large files)
+*.wav
+*.mp3
+*.ogg
+*.flac
+*.m4a
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Temporary
+tmp/
+temp/
+*.log
