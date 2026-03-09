@@ -1,7 +1,11 @@
 # ═══════════════════════════════════════════
-# Clinical Interview IR System — Dependencies
+# Clinical Interview IR System — Streamlit Cloud Dependencies
 # ═══════════════════════════════════════════
-# Install: pip install -r requirements.txt
+# This file is used by Streamlit Cloud for deployment.
+# It includes ONLY the lightweight packages needed for the web UI.
+#
+# For full local/Colab development (with pyannote, torch, etc.):
+#   pip install -r requirements-full.txt
 # ═══════════════════════════════════════════
 
 # ── Core ──
@@ -13,26 +17,12 @@ numpy>=1.24.0
 # ── Database ──
 supabase>=2.0.0
 
-# ── Audio Processing ──
-# pyannote.audio requires GPU for reasonable speed.
-# Install in Colab: pip install pyannote.audio
-pyannote.audio>=3.1.0
-torch>=2.0.0
-torchaudio>=2.0.0
-
-# ── Transcription (Groq Whisper API) ──
+# ── API Calls (Groq Whisper + LLM) ──
 httpx>=0.25.0
 groq>=0.4.0
-
-# ── Embeddings ──
-sentence-transformers>=2.2.0
-transformers>=4.35.0
-
-# ── LiveKit (for live interview mode) ──
-livekit>=0.8.0
-livekit-api>=0.5.0
 
 # ── Evaluation & Visualization ──
 scikit-learn>=1.3.0
 matplotlib>=3.7.0
 plotly>=5.15.0
+
