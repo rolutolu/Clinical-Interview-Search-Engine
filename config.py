@@ -1,6 +1,10 @@
 """
 Central configuration for the Clinical Interview IR System.
 All configurable parameters live here — the rubric rewards configurability.
+
+Secrets are loaded from two sources (in priority order):
+    1. Streamlit Cloud secrets (st.secrets) — used when deployed
+    2. Local .env file (via python-dotenv) — used in local development / Colab
 """
 
 import os
@@ -8,16 +12,34 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _get_secret(key: str, default: str = "") -> str:
+    """
+    Get a secret value. Checks Streamlit Cloud secrets first,
+    then falls back to environment variables (.env file).
+    """
+    # Try Streamlit secrets (available when running in Streamlit)
+    try:
+        import streamlit as st
+        if key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+
+    # Fall back to environment variable
+    return os.getenv(key, default)
+
+
 # ═══════════════════════════════════════════
 # API Keys
 # ═══════════════════════════════════════════
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-HF_TOKEN = os.getenv("HF_TOKEN", "")
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
-LIVEKIT_URL = os.getenv("LIVEKIT_URL", "")
-LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "")
-LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "")
+GROQ_API_KEY = _get_secret("GROQ_API_KEY")
+HF_TOKEN = _get_secret("HF_TOKEN")
+SUPABASE_URL = _get_secret("SUPABASE_URL")
+SUPABASE_KEY = _get_secret("SUPABASE_KEY")
+LIVEKIT_URL = _get_secret("LIVEKIT_URL")
+LIVEKIT_API_KEY = _get_secret("LIVEKIT_API_KEY")
+LIVEKIT_API_SECRET = _get_secret("LIVEKIT_API_SECRET")
 
 # ═══════════════════════════════════════════
 # Model Configuration

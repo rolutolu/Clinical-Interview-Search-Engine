@@ -20,8 +20,15 @@ INTERFACE CONTRACT (what the Streamlit pages call):
 
 import config
 from database.supabase_client import SupabaseClient
-from retrieval.embeddings import generate_embedding
 from typing import List, Optional
+
+# Check if sentence-transformers is available (not installed on Streamlit Cloud)
+_EMBEDDINGS_AVAILABLE = False
+try:
+    from retrieval.embeddings import generate_embedding
+    _EMBEDDINGS_AVAILABLE = True
+except ImportError:
+    pass
 
 
 def search(
@@ -47,6 +54,10 @@ def search(
         List of result dicts sorted by score (descending), each with:
             segment_id, interview_id, start_ms, end_ms,
             speaker_raw, speaker_role, text, score
+
+    Note:
+        If sentence-transformers is not installed (e.g. on Streamlit Cloud),
+        semantic and hybrid methods automatically fall back to lexical search.
     """
     if k is None:
         k = config.DEFAULT_K
@@ -59,6 +70,10 @@ def search(
         speaker_role = "PATIENT"
     elif mode == "clinician":
         speaker_role = "CLINICIAN"
+
+    # Fall back to lexical if embeddings not available
+    if not _EMBEDDINGS_AVAILABLE and method in ("semantic", "hybrid"):
+        method = "lexical"
 
     if method == "lexical":
         results = _lexical_search(db, query, k, interview_id, speaker_role)
