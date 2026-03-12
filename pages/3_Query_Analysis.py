@@ -13,9 +13,9 @@ Three modules:
 import streamlit as st
 import config
 
-st.set_page_config(page_title="Query & Analysis", page_icon="🔍", layout="wide")
+st.set_page_config(page_title="Query & Analysis", page_icon="QA", layout="wide")
 
-st.title("🔍 Query & Analysis Dashboard")
+st.title("Query & Analysis Dashboard")
 st.markdown(f'<div style="background:linear-gradient(135deg,#fff3cd,#ffeeba);border:1px solid #ffc107;border-radius:8px;padding:0.8rem;color:#856404;font-size:0.9rem;">{config.ETHICS_DISCLAIMER}</div>', unsafe_allow_html=True)
 
 # ══════════════════════════════════════════
@@ -68,9 +68,9 @@ st.divider()
 # Three Analysis Tabs
 # ══════════════════════════════════════════
 tab_summary, tab_qa, tab_analyzer = st.tabs([
-    "📝 Summarization",
-    "❓ Symptom QA",
-    "📋 Interview Analyzer",
+    "Summarization",
+    "Symptom QA",
+    "Interview Analyzer",
 ])
 
 
@@ -81,7 +81,7 @@ def display_segments(segments, title="Retrieved Segments"):
         st.info("No segments retrieved.")
         return
 
-    with st.expander(f"📄 {title} ({len(segments)} segments)", expanded=False):
+    with st.expander(f"{title} ({len(segments)} segments)", expanded=False):
         for seg in segments:
             role = seg.get("speaker_role", "UNKNOWN")
             text = seg.get("text", "")
@@ -93,7 +93,7 @@ def display_segments(segments, title="Retrieved Segments"):
 
             color = "#f0fff4" if role == "PATIENT" else "#ebf8ff"
             border = "#38a169" if role == "PATIENT" else "#3182ce"
-            icon = "🟢" if role == "PATIENT" else "🔵"
+            icon = "[P]" if role == "PATIENT" else "[C]"
 
             st.markdown(
                 f'<div style="background-color:{color};border-left:4px solid {border};'
@@ -153,14 +153,14 @@ with tab_qa:
         key="qa_query",
     )
 
-    st.caption("💡 Example queries:")
+    st.caption("Example queries:")
     example_cols = st.columns(3)
     for i, eq in enumerate(example_queries):
         with example_cols[i % 3]:
             if st.button(eq, key=f"example_{i}", use_container_width=True):
                 query = eq
 
-    if query and st.button("🔍 Search & Answer", key="btn_qa", type="primary"):
+    if query and st.button("Search & Answer", key="btn_qa", type="primary"):
         with st.spinner(f"Searching ({retrieval_mode} mode, K={k_value})..."):
             try:
                 from retrieval.search import search

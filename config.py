@@ -75,7 +75,7 @@ RETRIEVAL_MODES = ["combined", "patient", "clinician"]
 # Ethics
 # ═══════════════════════════════════════════
 ETHICS_DISCLAIMER = (
-    "⚠️ This system is for **educational purposes only**. "
+    "This system is for **educational purposes only**. "
     "It does NOT provide medical diagnoses or treatment recommendations. "
     "Always consult qualified healthcare professionals for medical decisions."
 )

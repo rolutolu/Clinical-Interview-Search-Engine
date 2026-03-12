@@ -39,7 +39,7 @@ class SupabaseClient:
             result = self.client.table("interviews").select("interview_id").limit(1).execute()
             return True
         except Exception as e:
-            print(f"❌ Supabase connection failed: {e}")
+            print(f"Supabase connection failed: {e}")
             return False
 
     # ═══════════════════════════════════════

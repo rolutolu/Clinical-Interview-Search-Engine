@@ -28,7 +28,7 @@ def test_env_vars():
         "HF_TOKEN": bool(config.HF_TOKEN),
     }
     for name, ok in checks.items():
-        print(f"  {'✅' if ok else '❌'} {name}")
+        print(f"  {'[OK]' if ok else '[X]'} {name}")
     return all(checks.values())
 
 
@@ -38,15 +38,15 @@ def test_supabase_connection():
     try:
         db = SupabaseClient()
         ok = db.test_connection()
-        print(f"  {'✅' if ok else '❌'} Supabase connection")
+        print(f"  {'[OK]' if ok else '[X]'} Supabase connection")
         return ok
     except Exception as e:
-        print(f"  ❌ Supabase connection failed: {e}")
+        print(f"  [X] Supabase connection failed: {e}")
         return False
 
 
 def test_crud_operations():
-    """Test basic CRUD: create interview → create segment → read → delete."""
+    """Test basic CRUD: create interview -> create segment -> read -> delete."""
     print("\n── Testing CRUD operations ──")
     db = SupabaseClient()
     test_id = "test_001"
@@ -60,7 +60,7 @@ def test_crud_operations():
             speaker_map={"SPEAKER_0": "PATIENT", "SPEAKER_1": "CLINICIAN"},
         )
         db.create_interview(interview)
-        print("  ✅ Create interview")
+        print("  [OK] Create interview")
 
         # Create segments
         segments = [
@@ -84,31 +84,31 @@ def test_crud_operations():
             ),
         ]
         count = db.insert_segments(segments)
-        print(f"  ✅ Insert segments ({count} inserted)")
+        print(f"  [OK] Insert segments ({count} inserted)")
 
         # Read segments
         fetched = db.get_segments(test_id)
         assert len(fetched) == 2, f"Expected 2, got {len(fetched)}"
-        print(f"  ✅ Read segments ({len(fetched)} found)")
+        print(f"  [OK] Read segments ({len(fetched)} found)")
 
         # Read patient-only
         patient_segs = db.get_segments(test_id, speaker_role="PATIENT")
         assert len(patient_segs) == 1
-        print(f"  ✅ Speaker filter (patient-only: {len(patient_segs)} found)")
+        print(f"  [OK] Speaker filter (patient-only: {len(patient_segs)} found)")
 
         # Read interview
         iv = db.get_interview(test_id)
         assert iv is not None
-        print(f"  ✅ Read interview: {iv['title']}")
+        print(f"  [OK] Read interview: {iv['title']}")
 
         # Cleanup
         db.delete_interview(test_id)
-        print("  ✅ Delete interview (cascade)")
+        print("  [OK] Delete interview (cascade)")
 
         return True
 
     except Exception as e:
-        print(f"  ❌ CRUD test failed: {e}")
+        print(f"  [X] CRUD test failed: {e}")
         # Attempt cleanup
         try:
             db.delete_interview(test_id)
@@ -133,24 +133,24 @@ def test_data_model():
     # Test citation tag
     tag = seg.citation_tag()
     assert "PATIENT" in tag
-    print(f"  ✅ Citation tag: {tag}")
+    print(f"  [OK] Citation tag: {tag}")
 
     # Test time range
     time_str = seg.time_range_str()
     assert "1:05" in time_str
-    print(f"  ✅ Time range: {time_str}")
+    print(f"  [OK] Time range: {time_str}")
 
     # Test to_dict (no embedding)
     d = seg.to_dict()
     assert "embedding" not in d
-    print(f"  ✅ to_dict excludes embedding")
+    print(f"  [OK] to_dict excludes embedding")
 
     return True
 
 
 if __name__ == "__main__":
     print("=" * 50)
-    print("Clinical Interview IR System — Connection Test")
+    print("Clinical Interview IR System - Connection Test")
     print("=" * 50)
 
     results = []
@@ -166,14 +166,14 @@ if __name__ == "__main__":
     print("RESULTS:")
     all_pass = True
     for name, passed in results:
-        print(f"  {'✅' if passed else '❌'} {name}")
+        print(f"  {'[OK]' if passed else '[X]'} {name}")
         if not passed:
             all_pass = False
 
     print("=" * 50)
     if all_pass:
-        print("🎉 All tests passed! Your system is ready.")
+        print("All tests passed! Your system is ready.")
     else:
-        print("⚠️ Some tests failed. Check your .env file and Supabase setup.")
+        print("Some tests failed. Check your .env file and Supabase setup.")
 
     sys.exit(0 if all_pass else 1)

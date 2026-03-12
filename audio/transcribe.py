@@ -51,7 +51,7 @@ class WhisperTranscriber:
                 f"{config.MAX_AUDIO_SIZE_MB} MB limit. Split the file first."
             )
 
-        print(f"🔄 Transcribing: {audio_path} ({file_size_mb:.1f} MB)")
+        print(f"Transcribing: {audio_path} ({file_size_mb:.1f} MB)")
 
         with open(audio_path, "rb") as f:
             response = httpx.post(
@@ -78,7 +78,7 @@ class WhisperTranscriber:
                 "text": seg["text"].strip(),
             })
 
-        print(f"✅ Transcription complete: {len(segments)} segments.")
+        print(f"Transcription complete: {len(segments)} segments.")
         return segments
 
     def transcribe_to_text(self, audio_path: str, language: str = "en") -> str:

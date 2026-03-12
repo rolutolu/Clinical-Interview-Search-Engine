@@ -10,9 +10,9 @@ This page will be fully implemented in Phase 4.
 import streamlit as st
 import config
 
-st.set_page_config(page_title="Live Interview", page_icon="🎤", layout="wide")
+st.set_page_config(page_title="Live Interview", page_icon="LI", layout="wide")
 
-st.title("🎤 Live Clinical Interview")
+st.title("Live Clinical Interview")
 st.markdown(f'<div style="background:linear-gradient(135deg,#fff3cd,#ffeeba);border:1px solid #ffc107;border-radius:8px;padding:0.8rem;color:#856404;font-size:0.9rem;">{config.ETHICS_DISCLAIMER}</div>', unsafe_allow_html=True)
 
 # Check LiveKit config
@@ -20,7 +20,7 @@ lk_configured = bool(config.LIVEKIT_URL and config.LIVEKIT_API_KEY)
 
 if not lk_configured:
     st.warning(
-        "⚠️ LiveKit is not configured. Add `LIVEKIT_URL`, `LIVEKIT_API_KEY`, "
+        "LiveKit is not configured. Add `LIVEKIT_URL`, `LIVEKIT_API_KEY`, "
         "and `LIVEKIT_API_SECRET` to your `.env` file.\n\n"
         "Get free credentials at: https://cloud.livekit.io"
     )
@@ -45,11 +45,11 @@ with col1:
 with col2:
     st.write("")  # Spacing
     st.write("")
-    create_btn = st.button("🔴 Create Room", type="primary", disabled=not lk_configured)
+    create_btn = st.button("Create Room", type="primary", disabled=not lk_configured)
 
 if create_btn:
     if lk_configured:
-        st.info("🚧 LiveKit integration will be implemented in Phase 4. "
+        st.info("LiveKit integration will be implemented in Phase 4. "
                 "The room creation, token generation, and audio track processing "
                 "pipeline will be wired here.")
         # TODO Phase 4:
@@ -70,7 +70,7 @@ st.caption("Segments will appear here in real-time as participants speak.")
 # Placeholder display
 st.markdown("""
 <div style="background:#f7fafc;border:1px dashed #cbd5e0;border-radius:8px;padding:2rem;text-align:center;color:#a0aec0;">
-    <p style="font-size:1.2rem;">🎙️ No active interview session</p>
+    <p style="font-size:1.2rem;">No active interview session</p>
     <p>Create a room and have participants join to start.</p>
 </div>
 """, unsafe_allow_html=True)

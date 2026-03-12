@@ -9,9 +9,9 @@ import streamlit as st
 import pandas as pd
 import config
 
-st.set_page_config(page_title="Evaluation", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Evaluation", page_icon="EV", layout="wide")
 
-st.title("📊 Retrieval Evaluation Dashboard")
+st.title("Retrieval Evaluation Dashboard")
 st.caption("Precision@K and Recall@K metrics — overall, patient-only, and clinician-only.")
 
 # ══════════════════════════════════════════
@@ -64,7 +64,7 @@ with col2:
 # ══════════════════════════════════════════
 # Run Evaluation
 # ══════════════════════════════════════════
-if st.button("🚀 Run Evaluation", type="primary", use_container_width=True):
+if st.button("Run Evaluation", type="primary", use_container_width=True):
     if not eval_labels:
         st.warning(
             "No evaluation labels found in the database. "
@@ -159,7 +159,7 @@ if st.button("🚀 Run Evaluation", type="primary", use_container_width=True):
 # Manual Label Upload
 # ══════════════════════════════════════════
 st.divider()
-st.subheader("📋 Upload Evaluation Labels")
+st.subheader("Upload Evaluation Labels")
 st.caption("Upload a JSON file with query-relevance labels for evaluation.")
 
 uploaded_labels = st.file_uploader("Upload relevance_labels.json", type=["json"], key="eval_upload")
@@ -173,6 +173,6 @@ if uploaded_labels:
 
         if st.button("Save Labels to Database"):
             count = db.insert_eval_labels(labels)
-            st.success(f"✅ {count} labels saved to database.")
+            st.success(f"{count} labels saved to database.")
     except Exception as e:
         st.error(f"Failed to parse labels: {e}")

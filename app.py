@@ -15,7 +15,7 @@ import config
 # ══════════════════════════════════════════
 st.set_page_config(
     page_title="Clinical Interview IR System",
-    page_icon="🏥",
+    page_icon="CI",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -74,30 +74,29 @@ st.markdown("""
 # Sidebar — System Status
 # ══════════════════════════════════════════
 with st.sidebar:
-    st.image("https://img.icons8.com/fluency/96/stethoscope.png", width=60)
     st.title("Clinical IR System")
-    st.caption("CP423 — Text Retrieval & Search Engines")
+    st.caption("CP423 - Text Retrieval & Search Engines")
 
     st.divider()
 
     # Connection status checks
-    st.subheader("🔌 System Status")
+    st.subheader("System Status")
 
     # Supabase
     supabase_ok = bool(config.SUPABASE_URL and config.SUPABASE_KEY)
-    st.write(f"{'✅' if supabase_ok else '❌'} Supabase Database")
+    st.write(f"{'[OK]' if supabase_ok else '[X]'} Supabase Database")
 
     # Groq
     groq_ok = bool(config.GROQ_API_KEY)
-    st.write(f"{'✅' if groq_ok else '❌'} Groq API (Whisper + LLM)")
+    st.write(f"{'[OK]' if groq_ok else '[X]'} Groq API (Whisper + LLM)")
 
     # HuggingFace
     hf_ok = bool(config.HF_TOKEN)
-    st.write(f"{'✅' if hf_ok else '❌'} HuggingFace (Pyannote)")
+    st.write(f"{'[OK]' if hf_ok else '[X]'} HuggingFace (Pyannote)")
 
     # LiveKit
     lk_ok = bool(config.LIVEKIT_URL and config.LIVEKIT_API_KEY)
-    st.write(f"{'✅' if lk_ok else '⚠️'} LiveKit (optional for live mode)")
+    st.write(f"{'[OK]' if lk_ok else '[!]'} LiveKit (optional for live mode)")
 
     if not all([supabase_ok, groq_ok, hf_ok]):
         st.warning("Some API keys are missing. Check your `.env` file.")
@@ -105,7 +104,7 @@ with st.sidebar:
     st.divider()
 
     # Configuration display
-    st.subheader("⚙️ Configuration")
+    st.subheader("Configuration")
     st.write(f"**Whisper Model:** {config.WHISPER_MODEL}")
     st.write(f"**Embedding Model:** {config.EMBEDDING_MODEL.split('/')[-1]}")
     st.write(f"**LLM Model:** {config.LLM_MODEL}")
@@ -115,34 +114,35 @@ with st.sidebar:
 # ══════════════════════════════════════════
 # Main Page — Home / Dashboard
 # ══════════════════════════════════════════
-st.markdown('<p class="main-header">🏥 Clinical Interview Analysis & Retrieval System</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-header">Clinical Interview Analysis & Retrieval System</p>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">Intelligent speaker-aware retrieval for clinical interview transcripts</p>', unsafe_allow_html=True)
 
 # Ethics disclaimer
 st.markdown(f'<div class="ethics-banner">{config.ETHICS_DISCLAIMER}</div>', unsafe_allow_html=True)
 
+
 # Quick overview
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
-    st.markdown("### 📤 Upload")
+    st.markdown("### Upload")
     st.write("Upload clinical interview audio for offline processing with speaker diarization.")
-    st.page_link("pages/1_📤_Upload_Offline.py", label="Go to Upload", icon="📤")
+    st.page_link("pages/1_Upload_Offline.py", label="Go to Upload")
 
 with col2:
-    st.markdown("### 🎤 Live")
+    st.markdown("### Live")
     st.write("Conduct real-time interviews with LiveKit speaker separation.")
-    st.page_link("pages/2_🎤_Live_Interview.py", label="Go to Live", icon="🎤")
+    st.page_link("pages/2_Live_Interview.py", label="Go to Live")
 
 with col3:
-    st.markdown("### 🔍 Query")
+    st.markdown("### Query")
     st.write("Search, summarize, and analyze interviews with grounded LLM output.")
-    st.page_link("pages/3_🔍_Query_Analysis.py", label="Go to Query", icon="🔍")
+    st.page_link("pages/3_Query_Analysis.py", label="Go to Query")
 
 with col4:
-    st.markdown("### 📊 Evaluate")
+    st.markdown("### Evaluate")
     st.write("Run Precision@K and Recall@K evaluation across retrieval modes.")
-    st.page_link("pages/4_📊_Evaluation.py", label="Go to Evaluation", icon="📊")
+    st.page_link("pages/4_Evaluation.py", label="Go to Evaluation")
 
 
 # ══════════════════════════════════════════

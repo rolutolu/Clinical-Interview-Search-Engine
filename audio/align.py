@@ -90,7 +90,7 @@ def align_segments(
             )
         )
 
-    print(f"✅ Alignment complete: {len(aligned)} segments aligned.")
+    print(f"Alignment complete: {len(aligned)} segments aligned.")
     return aligned
 
 

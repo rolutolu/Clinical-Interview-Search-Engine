@@ -32,7 +32,7 @@ class LiveKitHandler:
             config.LIVEKIT_API_KEY,
             config.LIVEKIT_API_SECRET,
         )
-        print("✅ LiveKit handler initialized.")
+        print("LiveKit handler initialized.")
 
     def create_room(self, room_name: str) -> dict:
         """Create a LiveKit room for the interview session."""

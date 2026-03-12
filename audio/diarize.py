@@ -34,14 +34,14 @@ class SpeakerDiarizer:
             )
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"🔄 Loading diarization model on {self.device}...")
+        print(f"Loading diarization model on {self.device}...")
 
         self.pipeline = Pipeline.from_pretrained(
             config.DIARIZATION_MODEL,
             use_auth_token=config.HF_TOKEN,
         ).to(self.device)
 
-        print("✅ Diarization pipeline loaded.")
+        print("Diarization pipeline loaded.")
 
     def diarize(self, audio_path: str) -> List[Dict]:
         """
@@ -56,7 +56,7 @@ class SpeakerDiarizer:
                 - end_ms (int): Segment end in milliseconds
                 - speaker (str): Speaker label, e.g. "SPEAKER_00"
         """
-        print(f"🔄 Diarizing: {audio_path}")
+        print(f"Diarizing: {audio_path}")
         diarization = self.pipeline(audio_path)
 
         segments = []
@@ -67,7 +67,7 @@ class SpeakerDiarizer:
                 "speaker": speaker,
             })
 
-        print(f"✅ Diarization complete: {len(segments)} segments, "
+        print(f"Diarization complete: {len(segments)} segments, "
               f"{len(set(s['speaker'] for s in segments))} speakers detected.")
         return segments
 

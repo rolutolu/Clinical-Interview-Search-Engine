@@ -25,9 +25,9 @@ def _get_model():
     global _model
     if _model is None:
         from sentence_transformers import SentenceTransformer
-        print(f"🔄 Loading embedding model: {config.EMBEDDING_MODEL}")
+        print(f"Loading embedding model: {config.EMBEDDING_MODEL}")
         _model = SentenceTransformer(config.EMBEDDING_MODEL)
-        print("✅ Embedding model loaded.")
+        print("Embedding model loaded.")
     return _model
 
 
