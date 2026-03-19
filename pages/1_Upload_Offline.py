@@ -63,55 +63,52 @@ GROQ_CHUNK_LIMIT_MB = 24  # Stay under Groq's 25 MB limit
 def transcribe_audio(audio_path, filename, status_writer):
     """
     Transcribe audio via Groq Whisper API.
-    Automatically splits files over 24 MB into chunks.
-    Returns list of segment dicts with start_ms, end_ms, text.
+    Automatically splits files over 24 MB into chunks using ffmpeg.
     """
-    import httpx
-    from pydub import AudioSegment
+    import subprocess
 
     file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
 
     if file_size_mb <= GROQ_CHUNK_LIMIT_MB:
-        # Small file — single API call
         status_writer(f"Transcribing ({file_size_mb:.1f} MB)...")
         return _whisper_api_call(audio_path, filename)
     else:
-        # Large file — split into chunks
-        status_writer(f"File is {file_size_mb:.1f} MB — splitting into chunks...")
-        audio = AudioSegment.from_file(audio_path)
-        duration_ms = len(audio)
+        # Get duration using ffprobe
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "csv=p=0", audio_path],
+            capture_output=True, text=True
+        )
+        total_duration = float(result.stdout.strip())
 
-        # Calculate chunk duration to keep each under the limit
-        chunk_duration_ms = int(duration_ms * (GROQ_CHUNK_LIMIT_MB / file_size_mb))
-        num_chunks = math.ceil(duration_ms / chunk_duration_ms)
+        # Calculate how many chunks we need
+        num_chunks = math.ceil(file_size_mb / GROQ_CHUNK_LIMIT_MB)
+        chunk_duration = total_duration / num_chunks
 
-        status_writer(f"Split into {num_chunks} chunks. Transcribing...")
+        status_writer(f"File is {file_size_mb:.1f} MB — splitting into {num_chunks} chunks...")
 
         all_segments = []
-        cumulative_offset_ms = 0
-
         for i in range(num_chunks):
-            start = i * chunk_duration_ms
-            end = min((i + 1) * chunk_duration_ms, duration_ms)
-            chunk = audio[start:end]
-
-            # Export chunk to temp file
+            start_sec = i * chunk_duration
             chunk_path = os.path.join(tempfile.gettempdir(), f"chunk_{i:02d}.wav")
-            chunk.export(chunk_path, format="wav")
-            chunk_size_mb = os.path.getsize(chunk_path) / (1024 * 1024)
 
+            # Split with ffmpeg
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", audio_path, "-ss", str(start_sec),
+                 "-t", str(chunk_duration), "-ar", "16000", "-ac", "1", chunk_path],
+                capture_output=True
+            )
+
+            chunk_size_mb = os.path.getsize(chunk_path) / (1024 * 1024)
             status_writer(f"  Chunk {i+1}/{num_chunks} ({chunk_size_mb:.1f} MB)...")
 
             try:
                 chunk_segments = _whisper_api_call(chunk_path, f"chunk_{i:02d}.wav")
-
-                # Offset timestamps by cumulative position
+                offset_ms = int(start_sec * 1000)
                 for seg in chunk_segments:
-                    seg["start_ms"] += cumulative_offset_ms
-                    seg["end_ms"] += cumulative_offset_ms
+                    seg["start_ms"] += offset_ms
+                    seg["end_ms"] += offset_ms
                 all_segments.extend(chunk_segments)
-
-                cumulative_offset_ms = end  # Next chunk starts where this one ended
             finally:
                 if os.path.exists(chunk_path):
                     os.unlink(chunk_path)
@@ -121,7 +118,7 @@ def transcribe_audio(audio_path, filename, status_writer):
 
 
 def _whisper_api_call(audio_path, filename):
-    """Single Groq Whisper API call. Returns list of segment dicts."""
+    """Single Groq Whisper API call."""
     import httpx
 
     with open(audio_path, "rb") as f:
@@ -148,7 +145,6 @@ def _whisper_api_call(audio_path, filename):
             "text": seg["text"].strip(),
         })
     return segments
-
 
 # ══════════════════════════════════════════
 # Helper: LLM-based speaker labeling
