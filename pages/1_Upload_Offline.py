@@ -151,13 +151,13 @@ def _whisper_api_call(audio_path, filename):
 # ══════════════════════════════════════════
 def label_speakers_with_llm(segments):
     """
-    Use Groq LLM to label each transcript segment as PATIENT or CLINICIAN
-    based on conversational content.
+    Use Groq LLM to label each segment with numbered speaker roles
+    and identify names when possible.
+    speaker_raw = display label (e.g. "Dr. Den (CLINICIAN_1)")
+    speaker_role = base role for retrieval (PATIENT/CLINICIAN)
     """
     import httpx
 
-    # For very long transcripts, only send first 80 + last 20 segments
-    # to stay within token limits, then extrapolate pattern
     if len(segments) > 100:
         sample_segments = segments[:80] + segments[-20:]
         sample_indices = list(range(80)) + list(range(len(segments) - 20, len(segments)))
@@ -170,20 +170,28 @@ def label_speakers_with_llm(segments):
         transcript_lines.append(f"[{idx}] {seg['text']}")
     transcript_text = "\n".join(transcript_lines)
 
-    prompt = f"""You are analyzing a clinical interview transcript between a PATIENT and a CLINICIAN (doctor/therapist).
+    prompt = f"""You are analyzing a clinical/therapy transcript. There may be MULTIPLE clinicians and/or MULTIPLE patients. The audio may contain several separate sessions spliced together.
 
-Your task: For each numbered segment below, determine whether the speaker is PATIENT or CLINICIAN.
+Your task: For each numbered segment, identify the speaker using NUMBERED roles AND their name if you can determine it.
 
-Rules for identification:
-- The CLINICIAN asks questions, gives instructions, makes observations, uses medical terminology professionally
-- The PATIENT describes symptoms, answers questions, expresses feelings, describes their experience
-- In therapy sessions, the therapist/counselor is the CLINICIAN
-- Look at conversational flow — speakers typically alternate
+FORMAT:
+- First patient seen → PATIENT_1, second distinct patient → PATIENT_2, etc.
+- First clinician seen → CLINICIAN_1, second distinct clinician → CLINICIAN_2, etc.
+- If a speaker's name is mentioned or clearly implied in the transcript (e.g. "Hi Calvin", "Dr. Smith", "thanks doc Adams"), include it in the "name" field. Use the name as it appears — first name, last name, or title+name.
+- If you cannot confidently determine a name, set "name" to null.
 
-Respond with ONLY a JSON array of objects, one per segment, in this exact format:
-[{{"index": 0, "role": "PATIENT"}}, {{"index": 1, "role": "CLINICIAN"}}, ...]
+IDENTIFICATION RULES:
+- CLINICIAN: asks probing questions, gives professional guidance, uses therapeutic language, makes clinical observations, directs the conversation professionally
+- PATIENT: describes personal experiences, expresses emotions, answers questions about themselves, reports symptoms, shows vulnerability or resistance
+- A recording may contain MULTIPLE sessions with DIFFERENT therapists — each new professional voice is a new CLINICIAN_N
+- If a patient is non-verbal or non-cooperative, the clinician may speak for extended stretches — consecutive segments from the same speaker are normal
+- Track speaker identity by voice/style consistency — if the same clinician asks questions across multiple segments, they keep the same number
+- When the conversation clearly shifts to a new session (new greeting, different tone, topic reset), consider whether new speakers have appeared
 
-Do NOT include any other text, explanation, or markdown. Just the JSON array.
+Respond with ONLY a JSON array, one object per segment:
+[{{"index": 0, "role": "PATIENT_1", "name": "Calvin"}}, {{"index": 1, "role": "CLINICIAN_1", "name": "Dr. Den"}}, {{"index": 2, "role": "CLINICIAN_2", "name": null}}, ...]
+
+No other text. Just the JSON array.
 
 TRANSCRIPT:
 {transcript_text}"""
@@ -205,7 +213,6 @@ TRANSCRIPT:
     response.raise_for_status()
     content = response.json()["choices"][0]["message"]["content"]
 
-    # Parse JSON response
     content = content.strip()
     if content.startswith("```"):
         content = content.split("\n", 1)[1]
@@ -214,21 +221,39 @@ TRANSCRIPT:
         content = content.strip()
 
     labels = json.loads(content)
-    label_map = {item["index"]: item["role"] for item in labels}
+    label_map = {item["index"]: item for item in labels}
 
-    # Apply labels — for segments not in the sample, use nearest labeled neighbor
+    # Build a name lookup: role → name (from first confident identification)
+    name_lookup = {}
+    for item in labels:
+        role = item.get("role", "").upper()
+        name = item.get("name")
+        if name and role and role not in name_lookup:
+            name_lookup[role] = name
+
     for i, seg in enumerate(segments):
         if i in label_map:
-            seg["speaker_role"] = label_map[i]
-            seg["speaker_raw"] = label_map[i]
+            item = label_map[i]
         else:
-            # Find nearest labeled segment
             nearest = min(label_map.keys(), key=lambda x: abs(x - i))
-            seg["speaker_role"] = label_map[nearest]
-            seg["speaker_raw"] = label_map[nearest]
+            item = label_map[nearest]
+
+        role_numbered = item.get("role", "PATIENT_1").upper()
+        name = item.get("name") or name_lookup.get(role_numbered)
+
+        # speaker_raw = display label
+        if name:
+            seg["speaker_raw"] = f"{name} ({role_numbered})"
+        else:
+            seg["speaker_raw"] = role_numbered
+
+        # speaker_role = base role for retrieval filtering
+        if "CLINICIAN" in role_numbered or "THERAPIST" in role_numbered or "DOCTOR" in role_numbered:
+            seg["speaker_role"] = "CLINICIAN"
+        else:
+            seg["speaker_role"] = "PATIENT"
 
     return segments
-
 
 # ══════════════════════════════════════════
 # Step 1: Patient Profile
@@ -490,6 +515,7 @@ if st.session_state.processing_complete:
     if segments:
         for seg in segments:
             role = seg.get("speaker_role", "UNKNOWN")
+            raw = seg.get("speaker_raw", role)
             text = seg.get("text", "")
             start_ms = seg.get("start_ms", 0)
             end_ms = seg.get("end_ms", 0)
@@ -506,12 +532,16 @@ if st.session_state.processing_complete:
             st.markdown(
                 f'<div style="background-color:{color};border-left:4px solid {border};'
                 f'padding:0.5rem 1rem;margin:0.3rem 0;border-radius:0 4px 4px 0;">'
-                f'<strong>{role}</strong> <small>({time_str})</small><br>{text}</div>',
+                f'<strong>{raw}</strong> <small>({time_str})</small><br>{text}</div>',
                 unsafe_allow_html=True,
             )
 
         st.divider()
         p_count = sum(1 for s in segments if s["speaker_role"] == "PATIENT")
         c_count = sum(1 for s in segments if s["speaker_role"] == "CLINICIAN")
-        st.success(f"Total: {len(segments)} segments — Patient: {p_count} / Clinician: {c_count}")
+        unique_raw = sorted(set(s.get("speaker_raw", "") for s in segments))
+        st.success(
+            f"Total: {len(segments)} segments — Patient: {p_count} / Clinician: {c_count} — "
+            f"Speakers: {', '.join(unique_raw)}"
+        )
         st.info("Go to **Query Analysis** to search and analyze this interview.")
