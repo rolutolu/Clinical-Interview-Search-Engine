@@ -28,3 +28,4 @@ plotly>=5.15.0
 
 # ── Audio Processing (chunking large files) ──
 pydub>=0.25.1
+pyaudioop>=0.0.1
