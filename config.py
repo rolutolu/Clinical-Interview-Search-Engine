@@ -61,7 +61,7 @@ SEMANTIC_WEIGHT = 0.6              # Weight for vector similarity in hybrid rank
 # ═══════════════════════════════════════════
 # Audio Configuration
 # ═══════════════════════════════════════════
-MAX_AUDIO_SIZE_MB = 25             # Groq free tier file size limit
+MAX_AUDIO_SIZE_MB = 200             # Groq free tier file size limit
 SUPPORTED_AUDIO_FORMATS = [".wav", ".mp3", ".ogg", ".flac", ".m4a"]
 CHUNK_DURATION_SEC = 30            # For live audio chunking
 
