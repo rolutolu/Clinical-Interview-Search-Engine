@@ -2,7 +2,8 @@
 Page 1: Upload & Offline Pipeline
 
 TWO MODES:
-  - Cloud mode (no GPU): Groq Whisper transcription + Groq LLM speaker labeling
+  - Cloud mode (no GPU): Groq Whisper transcription (with auto-chunking
+    for files over 25 MB) + Groq LLM speaker labeling
   - Full mode (GPU): Pyannote diarization + Whisper + alignment
 
 Both are fully automatic — no manual speaker assignment needed.
@@ -14,6 +15,7 @@ import tempfile
 import os
 import uuid
 import json
+import math
 
 st.set_page_config(page_title="Upload Interview", page_icon="UP", layout="wide")
 st.title("Upload & Process Clinical Interview")
@@ -37,7 +39,7 @@ if _HAS_TORCH:
 else:
     st.info(
         "Running in **cloud mode**: Groq Whisper transcription + LLM-based speaker labeling. "
-        "For acoustic diarization, use the Colab notebook."
+        "Large files are automatically split into chunks."
     )
 
 # ══════════════════════════════════════════
@@ -52,6 +54,101 @@ for key in [
 if "processing_complete" not in st.session_state:
     st.session_state.processing_complete = False
 
+GROQ_CHUNK_LIMIT_MB = 24  # Stay under Groq's 25 MB limit
+
+
+# ══════════════════════════════════════════
+# Helper: Chunked Whisper transcription
+# ══════════════════════════════════════════
+def transcribe_audio(audio_path, filename, status_writer):
+    """
+    Transcribe audio via Groq Whisper API.
+    Automatically splits files over 24 MB into chunks.
+    Returns list of segment dicts with start_ms, end_ms, text.
+    """
+    import httpx
+    from pydub import AudioSegment
+
+    file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+
+    if file_size_mb <= GROQ_CHUNK_LIMIT_MB:
+        # Small file — single API call
+        status_writer(f"Transcribing ({file_size_mb:.1f} MB)...")
+        return _whisper_api_call(audio_path, filename)
+    else:
+        # Large file — split into chunks
+        status_writer(f"File is {file_size_mb:.1f} MB — splitting into chunks...")
+        audio = AudioSegment.from_file(audio_path)
+        duration_ms = len(audio)
+
+        # Calculate chunk duration to keep each under the limit
+        chunk_duration_ms = int(duration_ms * (GROQ_CHUNK_LIMIT_MB / file_size_mb))
+        num_chunks = math.ceil(duration_ms / chunk_duration_ms)
+
+        status_writer(f"Split into {num_chunks} chunks. Transcribing...")
+
+        all_segments = []
+        cumulative_offset_ms = 0
+
+        for i in range(num_chunks):
+            start = i * chunk_duration_ms
+            end = min((i + 1) * chunk_duration_ms, duration_ms)
+            chunk = audio[start:end]
+
+            # Export chunk to temp file
+            chunk_path = os.path.join(tempfile.gettempdir(), f"chunk_{i:02d}.wav")
+            chunk.export(chunk_path, format="wav")
+            chunk_size_mb = os.path.getsize(chunk_path) / (1024 * 1024)
+
+            status_writer(f"  Chunk {i+1}/{num_chunks} ({chunk_size_mb:.1f} MB)...")
+
+            try:
+                chunk_segments = _whisper_api_call(chunk_path, f"chunk_{i:02d}.wav")
+
+                # Offset timestamps by cumulative position
+                for seg in chunk_segments:
+                    seg["start_ms"] += cumulative_offset_ms
+                    seg["end_ms"] += cumulative_offset_ms
+                all_segments.extend(chunk_segments)
+
+                cumulative_offset_ms = end  # Next chunk starts where this one ended
+            finally:
+                if os.path.exists(chunk_path):
+                    os.unlink(chunk_path)
+
+        status_writer(f"Transcription complete — {len(all_segments)} segments from {num_chunks} chunks.")
+        return all_segments
+
+
+def _whisper_api_call(audio_path, filename):
+    """Single Groq Whisper API call. Returns list of segment dicts."""
+    import httpx
+
+    with open(audio_path, "rb") as f:
+        response = httpx.post(
+            "https://api.groq.com/openai/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {config.GROQ_API_KEY}"},
+            files={"file": (filename, f)},
+            data={
+                "model": config.WHISPER_MODEL,
+                "language": "en",
+                "response_format": "verbose_json",
+                "timestamp_granularities[]": "segment",
+            },
+            timeout=120.0,
+        )
+    response.raise_for_status()
+    result = response.json()
+
+    segments = []
+    for seg in result.get("segments", []):
+        segments.append({
+            "start_ms": int(seg["start"] * 1000),
+            "end_ms": int(seg["end"] * 1000),
+            "text": seg["text"].strip(),
+        })
+    return segments
+
 
 # ══════════════════════════════════════════
 # Helper: LLM-based speaker labeling
@@ -59,15 +156,22 @@ if "processing_complete" not in st.session_state:
 def label_speakers_with_llm(segments):
     """
     Use Groq LLM to label each transcript segment as PATIENT or CLINICIAN
-    based on conversational content (questions vs complaints, medical
-    terminology, etc). Works without GPU or diarization.
+    based on conversational content.
     """
     import httpx
 
-    # Build numbered transcript for the LLM
+    # For very long transcripts, only send first 80 + last 20 segments
+    # to stay within token limits, then extrapolate pattern
+    if len(segments) > 100:
+        sample_segments = segments[:80] + segments[-20:]
+        sample_indices = list(range(80)) + list(range(len(segments) - 20, len(segments)))
+    else:
+        sample_segments = segments
+        sample_indices = list(range(len(segments)))
+
     transcript_lines = []
-    for i, seg in enumerate(segments):
-        transcript_lines.append(f"[{i}] {seg['text']}")
+    for idx, seg in zip(sample_indices, sample_segments):
+        transcript_lines.append(f"[{idx}] {seg['text']}")
     transcript_text = "\n".join(transcript_lines)
 
     prompt = f"""You are analyzing a clinical interview transcript between a PATIENT and a CLINICIAN (doctor/therapist).
@@ -97,16 +201,15 @@ TRANSCRIPT:
         json={
             "model": config.LLM_MODEL,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 4000,
+            "max_tokens": 8000,
             "temperature": 0.1,
         },
-        timeout=60.0,
+        timeout=90.0,
     )
     response.raise_for_status()
     content = response.json()["choices"][0]["message"]["content"]
 
-    # Parse the JSON response
-    # Strip markdown code fences if present
+    # Parse JSON response
     content = content.strip()
     if content.startswith("```"):
         content = content.split("\n", 1)[1]
@@ -115,12 +218,18 @@ TRANSCRIPT:
         content = content.strip()
 
     labels = json.loads(content)
-
-    # Apply labels to segments
     label_map = {item["index"]: item["role"] for item in labels}
+
+    # Apply labels — for segments not in the sample, use nearest labeled neighbor
     for i, seg in enumerate(segments):
-        seg["speaker_role"] = label_map.get(i, "PATIENT")
-        seg["speaker_raw"] = label_map.get(i, "PATIENT")
+        if i in label_map:
+            seg["speaker_role"] = label_map[i]
+            seg["speaker_raw"] = label_map[i]
+        else:
+            # Find nearest labeled segment
+            nearest = min(label_map.keys(), key=lambda x: abs(x - i))
+            seg["speaker_role"] = label_map[nearest]
+            seg["speaker_raw"] = label_map[nearest]
 
     return segments
 
@@ -146,7 +255,7 @@ st.subheader("Step 2: Upload Interview Audio")
 uploaded_file = st.file_uploader(
     "Upload clinical interview recording",
     type=["wav", "mp3", "ogg", "flac", "m4a"],
-    help=f"Max {config.MAX_AUDIO_SIZE_MB} MB.",
+    help=f"Max {config.MAX_AUDIO_SIZE_MB} MB. Files over 25 MB are automatically chunked.",
 )
 
 if uploaded_file:
@@ -155,6 +264,8 @@ if uploaded_file:
     st.caption(f"{uploaded_file.name} — {file_size_mb:.1f} MB")
     if file_size_mb > config.MAX_AUDIO_SIZE_MB:
         st.error(f"File exceeds {config.MAX_AUDIO_SIZE_MB} MB limit.")
+    elif file_size_mb > GROQ_CHUNK_LIMIT_MB:
+        st.caption(f"File will be split into ~{math.ceil(file_size_mb / GROQ_CHUNK_LIMIT_MB)} chunks for transcription.")
 
 # ══════════════════════════════════════════
 # Step 3: Process
@@ -162,6 +273,11 @@ if uploaded_file:
 st.subheader("Step 3: Process Interview")
 
 if uploaded_file and st.button("Run Offline Pipeline", type="primary", use_container_width=True):
+    file_size_mb = uploaded_file.size / (1024 * 1024)
+    if file_size_mb > config.MAX_AUDIO_SIZE_MB:
+        st.error(f"File exceeds {config.MAX_AUDIO_SIZE_MB} MB limit.")
+        st.stop()
+
     with tempfile.NamedTemporaryFile(
         delete=False, suffix=os.path.splitext(uploaded_file.name)[1]
     ) as tmp:
@@ -171,7 +287,6 @@ if uploaded_file and st.button("Run Offline Pipeline", type="primary", use_conta
     try:
         from database.models import Interview, PatientProfile, Segment
         from database.supabase_client import SupabaseClient
-        import httpx
 
         db = SupabaseClient()
         interview_id = str(uuid.uuid4())[:8]
@@ -200,39 +315,26 @@ if uploaded_file and st.button("Run Offline Pipeline", type="primary", use_conta
                 db.create_profile(profile)
                 st.write("Patient profile saved.")
 
-            # ── Transcription (Groq Whisper API) ──
-            st.write("Transcribing audio via Groq Whisper API...")
+            # ── Transcription (with auto-chunking) ──
             try:
-                with open(tmp_path, "rb") as f:
-                    response = httpx.post(
-                        "https://api.groq.com/openai/v1/audio/transcriptions",
-                        headers={"Authorization": f"Bearer {config.GROQ_API_KEY}"},
-                        files={"file": (uploaded_file.name, f)},
-                        data={
-                            "model": config.WHISPER_MODEL,
-                            "language": "en",
-                            "response_format": "verbose_json",
-                            "timestamp_granularities[]": "segment",
-                        },
-                        timeout=120.0,
-                    )
-                response.raise_for_status()
-                whisper_result = response.json()
+                raw_segments = transcribe_audio(
+                    tmp_path, uploaded_file.name, st.write
+                )
 
                 trans_segments = []
-                for seg in whisper_result.get("segments", []):
+                for seg in raw_segments:
                     trans_segments.append({
                         "segment_id": str(uuid.uuid4())[:8],
                         "interview_id": interview_id,
-                        "start_ms": int(seg["start"] * 1000),
-                        "end_ms": int(seg["end"] * 1000),
-                        "text": seg["text"].strip(),
+                        "start_ms": seg["start_ms"],
+                        "end_ms": seg["end_ms"],
+                        "text": seg["text"],
                         "source_mode": "offline",
                         "keywords": [],
                         "speaker_raw": "",
                         "speaker_role": "",
                     })
-                st.write(f"Transcription complete — {len(trans_segments)} segments.")
+                st.write(f"Total: {len(trans_segments)} transcript segments.")
             except Exception as e:
                 st.error(f"Transcription failed: {e}")
                 status.update(label="Pipeline failed at transcription", state="error")
@@ -241,7 +343,6 @@ if uploaded_file and st.button("Run Offline Pipeline", type="primary", use_conta
             # ── Speaker labeling ──
             diar_succeeded = False
 
-            # Try pyannote first if GPU available
             if _HAS_TORCH:
                 st.write("Running pyannote speaker diarization (GPU)...")
                 try:
@@ -266,7 +367,6 @@ if uploaded_file and st.button("Run Offline Pipeline", type="primary", use_conta
                             "speaker": speaker,
                         })
 
-                    # Align transcript with diarization
                     speaker_durations = {}
                     for d in diar_segments:
                         spk = d["speaker"]
@@ -284,12 +384,11 @@ if uploaded_file and st.button("Run Offline Pipeline", type="primary", use_conta
                         t_seg["speaker_raw"] = best_speaker
 
                     unique_speakers = sorted(set(s["speaker_raw"] for s in trans_segments))
-                    st.write(f"Diarization complete — {len(unique_speakers)} speakers detected.")
+                    st.write(f"Diarization complete — {len(unique_speakers)} speakers.")
                     diar_succeeded = True
                 except Exception as e:
-                    st.warning(f"Diarization failed: {e}. Falling back to LLM speaker labeling.")
+                    st.warning(f"Diarization failed: {e}. Falling back to LLM labeling.")
 
-            # Fall back to LLM-based labeling
             if not diar_succeeded:
                 st.write("Labeling speakers using Groq LLM analysis...")
                 try:
@@ -303,14 +402,11 @@ if uploaded_file and st.button("Run Offline Pipeline", type="primary", use_conta
 
             st.session_state.aligned_segments = trans_segments
 
-            # ── Determine if we need manual role mapping ──
             if diar_succeeded:
-                # Pyannote gives SPEAKER_00/01 — need manual mapping
                 unique_speakers = sorted(set(s["speaker_raw"] for s in trans_segments))
                 st.session_state.speakers_detected = unique_speakers
                 status.update(label="Diarization complete — assign speaker roles below.", state="complete")
             else:
-                # LLM already labeled as PATIENT/CLINICIAN — go straight to saving
                 speaker_map = {"PATIENT": "PATIENT", "CLINICIAN": "CLINICIAN"}
                 segments_to_insert = []
                 for seg in trans_segments:
@@ -335,7 +431,7 @@ if uploaded_file and st.button("Run Offline Pipeline", type="primary", use_conta
             os.unlink(tmp_path)
 
 # ══════════════════════════════════════════
-# Step 4: Speaker Role Mapping (only for pyannote path)
+# Step 4: Speaker Role Mapping (pyannote path only)
 # ══════════════════════════════════════════
 if (st.session_state.aligned_segments
         and not st.session_state.processing_complete
