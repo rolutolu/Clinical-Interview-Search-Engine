@@ -57,6 +57,10 @@ streamlit run app.py
 
 Open http://localhost:8501 in your browser.
 
+OR
+
+Run Demo Cloud App: https://clinical-interview-search-engine-af5wvzrrvndruvwainck9e.streamlit.app/
+
 ## Project Structure
 
 ```
