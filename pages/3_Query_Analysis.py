@@ -158,7 +158,8 @@ with tab_qa:
     for i, eq in enumerate(example_queries):
         with example_cols[i % 3]:
             if st.button(eq, key=f"example_{i}", use_container_width=True):
-                query = eq
+                st.session_state.qa_query = eq
+                st.rerun()
 
     if query and st.button("Search & Answer", key="btn_qa", type="primary"):
         with st.spinner(f"Searching ({retrieval_mode} mode, K={k_value})..."):

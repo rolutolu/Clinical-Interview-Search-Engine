@@ -12,7 +12,7 @@ reference segments.
 from dataclasses import dataclass, field, asdict
 from typing import Optional, List
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 @dataclass
@@ -35,7 +35,7 @@ class Segment:
     source_mode: str = "offline"         # "offline" or "live"
     embedding: Optional[List[float]] = None  # Vector embedding (384-dim for MiniLM)
     keywords: Optional[List[str]] = None     # Extracted medical entities (optional)
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> dict:
         """Convert to dict for JSON serialization (excludes embedding)."""

@@ -16,7 +16,6 @@ import os
 import uuid
 import json
 import math
-from retrieval.embeddings import generate_embeddings_batch
 
 st.set_page_config(page_title="Upload Interview", page_icon="UP", layout="wide")
 st.title("Upload & Process Clinical Interview")
@@ -432,11 +431,15 @@ if uploaded_file and st.button("Run Offline Pipeline", type="primary", use_conta
                     ))
 
                 # ── Generate Embeddings ──
-                st.write("Generating vector embeddings for semantic search...")
-                texts = [seg["text"] for seg in trans_segments]
-                embeddings = generate_embeddings_batch(texts)
-                for seg, emb in zip(segments_to_insert, embeddings):
-                    seg.embedding = emb
+                try:
+                    from retrieval.embeddings import generate_embeddings_batch
+                    st.write("Generating vector embeddings for semantic search...")
+                    texts = [seg["text"] for seg in trans_segments]
+                    embeddings = generate_embeddings_batch(texts)
+                    for seg, emb in zip(segments_to_insert, embeddings):
+                        seg.embedding = emb
+                except Exception as e:
+                    st.warning(f"Embedding generation failed: {e}. Segments will be saved without embeddings (semantic search won't work for this interview).")
 
                 count = db.insert_segments(segments_to_insert)
                 db.update_interview_speaker_map(interview_id, speaker_map)
@@ -492,11 +495,15 @@ if (st.session_state.aligned_segments
             ))
 
         # ── Generate Embeddings ──
-        st.write("Generating vector embeddings for semantic search...")
-        texts = [seg.text for seg in segments_to_insert]
-        embeddings = generate_embeddings_batch(texts)
-        for seg, emb in zip(segments_to_insert, embeddings):
-            seg.embedding = emb
+        try:
+            from retrieval.embeddings import generate_embeddings_batch
+            st.write("Generating vector embeddings for semantic search...")
+            texts = [seg.text for seg in segments_to_insert]
+            embeddings = generate_embeddings_batch(texts)
+            for seg, emb in zip(segments_to_insert, embeddings):
+                seg.embedding = emb
+        except Exception as e:
+            st.warning(f"Embedding generation failed: {e}. Segments will be saved without embeddings (semantic search won't work for this interview).")
 
         count = db.insert_segments(segments_to_insert)
         db.update_interview_speaker_map(st.session_state.interview_id, speaker_map)
