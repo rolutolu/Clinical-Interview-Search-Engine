@@ -16,6 +16,7 @@ import os
 import uuid
 import json
 import math
+from retrieval.embeddings import generate_embeddings_batch
 
 st.set_page_config(page_title="Upload Interview", page_icon="UP", layout="wide")
 st.title("Upload & Process Clinical Interview")
@@ -42,9 +43,7 @@ else:
         "Large files are automatically split into chunks."
     )
 
-# ══════════════════════════════════════════
 # Session State
-# ══════════════════════════════════════════
 for key in [
     "interview_id", "transcription_segments", "aligned_segments",
     "diarization_segments", "speakers_detected",
@@ -57,9 +56,7 @@ if "processing_complete" not in st.session_state:
 GROQ_CHUNK_LIMIT_MB = 24  # Stay under Groq's 25 MB limit
 
 
-# ══════════════════════════════════════════
 # Helper: Chunked Whisper transcription
-# ══════════════════════════════════════════
 def transcribe_audio(audio_path, filename, status_writer):
     """
     Transcribe audio via Groq Whisper API.
@@ -146,9 +143,7 @@ def _whisper_api_call(audio_path, filename):
         })
     return segments
 
-# ══════════════════════════════════════════
 # Helper: LLM-based speaker labeling
-# ══════════════════════════════════════════
 def label_speakers_with_llm(segments):
     """
     Use Groq LLM to label each segment with numbered speaker roles
@@ -255,9 +250,7 @@ TRANSCRIPT:
 
     return segments
 
-# ══════════════════════════════════════════
 # Step 1: Patient Profile
-# ══════════════════════════════════════════
 st.subheader("Step 1: Patient Profile (Optional)")
 with st.expander("Enter Patient Profile", expanded=False):
     col1, col2 = st.columns(2)
@@ -269,9 +262,7 @@ with st.expander("Enter Patient Profile", expanded=False):
         input_method = st.selectbox("Input Method", ["text", "voice"])
     medical_history = st.text_area("Medical History", placeholder="Relevant history...", height=100)
 
-# ══════════════════════════════════════════
 # Step 2: Upload Audio
-# ══════════════════════════════════════════
 st.subheader("Step 2: Upload Interview Audio")
 uploaded_file = st.file_uploader(
     "Upload clinical interview recording",
@@ -288,9 +279,7 @@ if uploaded_file:
     elif file_size_mb > GROQ_CHUNK_LIMIT_MB:
         st.caption(f"File will be split into ~{math.ceil(file_size_mb / GROQ_CHUNK_LIMIT_MB)} chunks for transcription.")
 
-# ══════════════════════════════════════════
 # Step 3: Process
-# ══════════════════════════════════════════
 st.subheader("Step 3: Process Interview")
 
 if uploaded_file and st.button("Run Offline Pipeline", type="primary", use_container_width=True):
@@ -442,6 +431,13 @@ if uploaded_file and st.button("Run Offline Pipeline", type="primary", use_conta
                         source_mode=seg["source_mode"],
                     ))
 
+                # ── Generate Embeddings ──
+                st.write("Generating vector embeddings for semantic search...")
+                texts = [seg["text"] for seg in trans_segments]
+                embeddings = generate_embeddings_batch(texts)
+                for seg, emb in zip(segments_to_insert, embeddings):
+                    seg.embedding = emb
+
                 count = db.insert_segments(segments_to_insert)
                 db.update_interview_speaker_map(interview_id, speaker_map)
                 st.session_state.processing_complete = True
@@ -451,9 +447,7 @@ if uploaded_file and st.button("Run Offline Pipeline", type="primary", use_conta
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
-# ══════════════════════════════════════════
 # Step 4: Speaker Role Mapping (pyannote path only)
-# ══════════════════════════════════════════
 if (st.session_state.aligned_segments
         and not st.session_state.processing_complete
         and st.session_state.speakers_detected):
@@ -497,14 +491,19 @@ if (st.session_state.aligned_segments
                 source_mode=seg["source_mode"],
             ))
 
+        # ── Generate Embeddings ──
+        st.write("Generating vector embeddings for semantic search...")
+        texts = [seg.text for seg in segments_to_insert]
+        embeddings = generate_embeddings_batch(texts)
+        for seg, emb in zip(segments_to_insert, embeddings):
+            seg.embedding = emb
+
         count = db.insert_segments(segments_to_insert)
         db.update_interview_speaker_map(st.session_state.interview_id, speaker_map)
         st.session_state.processing_complete = True
         st.success(f"{count} segments saved to database!")
 
-# ══════════════════════════════════════════
 # Step 5: View Results
-# ══════════════════════════════════════════
 if st.session_state.processing_complete:
     st.subheader("Interview Transcript")
     from database.supabase_client import SupabaseClient

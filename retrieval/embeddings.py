@@ -6,10 +6,6 @@ Model: all-MiniLM-L6-v2 (384-dim vectors)
     - Good quality for medical/clinical text similarity
 
 Owner: Tolu (M3) — implement and optimize.
-
-INTERFACE CONTRACT:
-    generate_embedding(text: str) -> List[float]   # 384-dim vector
-    generate_embeddings_batch(texts: List[str]) -> List[List[float]]
 """
 
 import config
