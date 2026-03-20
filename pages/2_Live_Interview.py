@@ -108,7 +108,7 @@ st.subheader("Setup & Demo Instructions")
 st.info(
     "**Live interview requires a local environment** (not Streamlit Cloud) "
     "because it needs browser microphone access via WebRTC. "
-    "Follow the instructions below to run the demo locally."
+    "Follow the readme instructions to run the demo locally."
 )
 
 with st.expander("Step 1: Get LiveKit Credentials (Free)", expanded=False):
@@ -149,40 +149,6 @@ with st.expander("Step 3: Conduct a Live Interview Demo", expanded=False):
     4. Click **End Interview** — processes audio tracks and stores segments
     5. Go to **Query Analysis** to search and analyze the live interview
     """)
-
-with st.expander("Step 4: Record Demo Video", expanded=False):
-    st.markdown("""
-    For the course submission, record a **5-10 minute narrated video** showing:
-
-    1. LiveKit room creation
-    2. Two participants joining with assigned roles
-    3. Live transcript appearing as participants speak
-    4. Segments stored in Supabase after the interview ends
-    5. Query Analysis page showing results from the live interview
-
-    Use screen recording software (OBS, Loom, or built-in OS recorder).
-    """)
-
-st.divider()
-
-# ══════════════════════════════════════════
-# LiveKit Status
-# ══════════════════════════════════════════
-st.subheader("LiveKit Configuration Status")
-
-lk_configured = bool(config.LIVEKIT_URL and config.LIVEKIT_API_KEY and config.LIVEKIT_API_SECRET)
-
-if lk_configured:
-    st.success("LiveKit credentials are configured.")
-    st.write(f"**URL:** `{config.LIVEKIT_URL[:30]}...`")
-    st.write(f"**API Key:** `{config.LIVEKIT_API_KEY[:8]}...`")
-    st.caption("Run this app locally to use live interview features.")
-else:
-    st.warning(
-        "LiveKit is not configured. Add `LIVEKIT_URL`, `LIVEKIT_API_KEY`, "
-        "and `LIVEKIT_API_SECRET` to your `.env` file or Streamlit secrets."
-    )
-    st.markdown("Get free credentials at: **https://cloud.livekit.io**")
 
 st.divider()
 
