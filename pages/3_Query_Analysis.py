@@ -58,8 +58,8 @@ with col_ctrl2:
 with col_ctrl3:
     search_method = st.selectbox(
         "Search Method",
-        ["hybrid", "semantic", "lexical"],
-        help="Hybrid: lexical + semantic combined. Semantic: vector similarity. Lexical: keyword matching.",
+        ["lexical"],
+        help="Lexical: keyword matching via Postgres full-text search. Semantic/hybrid available in Colab with sentence-transformers.",
     )
 
 st.divider()
