@@ -40,6 +40,7 @@ SUPABASE_KEY = _get_secret("SUPABASE_KEY")
 LIVEKIT_URL = _get_secret("LIVEKIT_URL")
 LIVEKIT_API_KEY = _get_secret("LIVEKIT_API_KEY")
 LIVEKIT_API_SECRET = _get_secret("LIVEKIT_API_SECRET")
+ASSEMBLYAI_API_KEY = _get_secret("ASSEMBLYAI_API_KEY")
 
 # ═══════════════════════════════════════════
 # Model Configuration
