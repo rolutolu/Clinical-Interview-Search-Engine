@@ -145,25 +145,17 @@ def _whisper_api_call(audio_path, filename):
 # Helper: LLM-based speaker labeling
 def label_speakers_with_llm(segments):
     """
-    Two-pass LLM speaker labeling based on DiarizationLM (Wang et al. 2024)
-    and iterative clinical interview diarization (Marie et al. 2026).
+    Single-pass LLM speaker labeling with chain-of-thought reasoning
+    and a few-shot discourse analysis example.
 
-    Pass 1: Identify the cast of speakers (with name aliases and roles)
-    Pass 2: Label each segment using the established cast
-
-    This prevents over-segmentation (creating too many speakers) and
-    resolves name aliases (Bob = Dr. Bob = the therapist).
+    Based on: Wei et al. 2022 (CoT prompting), DiarizationLM (Wang et al. 2024),
+    and discourse pragmatics principles for turn-taking analysis.
     """
     import httpx
 
-    # ── Build transcript sample ──
     if len(segments) > 120:
-        sample_segments = segments[:80] + segments[len(segments)//2 - 10 : len(segments)//2 + 10] + segments[-20:]
-        sample_indices = (
-            list(range(80))
-            + list(range(len(segments)//2 - 10, len(segments)//2 + 10))
-            + list(range(len(segments) - 20, len(segments)))
-        )
+        sample_segments = segments[:90] + segments[-30:]
+        sample_indices = list(range(90)) + list(range(len(segments) - 30, len(segments)))
     else:
         sample_segments = segments
         sample_indices = list(range(len(segments)))
@@ -173,89 +165,61 @@ def label_speakers_with_llm(segments):
         transcript_lines.append(f"[{idx}] {seg['text']}")
     transcript_text = "\n".join(transcript_lines)
 
-    # ══════════════════════════════════════════
-    # PASS 1: Identify speaker cast
-    # ══════════════════════════════════════════
-    pass1_prompt = f"""You are a clinical transcript analyst. Your task is to identify the CAST OF SPEAKERS in this recording.
+    prompt = f"""You are an expert in discourse analysis and conversational pragmatics, specializing in clinical and therapy transcripts.
 
-IMPORTANT PRINCIPLES (from clinical diarization research):
-- PARSIMONY: Prefer FEWER speakers. Do NOT create a new speaker unless there is STRONG evidence of a distinct individual. A recording of a therapy session typically has 2-3 speakers, rarely more.
-- NAME ALIASING: The same person may be referred to by different names, titles, or nicknames. Examples: "Dr. Dan" and "Bob" could be the same therapist whose full name is Bob Dan. "Doc" and "Dr. Smith" are the same person. A first name and a title+last name often refer to the same person.
-- ROLE CONSISTENCY: If someone is acting as a therapist/clinician throughout a section, they remain a clinician even if addressed casually by first name.
-- SESSION BOUNDARIES: A recording may contain multiple therapy sessions spliced together. A shift in topic, greeting, or tone may indicate a new session — but the SAME patient can appear across sessions.
-- CONVERSATIONAL EVIDENCE: Identify speakers by HOW they speak, not just WHAT is said about them. Clinicians ask open-ended questions, reflect feelings, guide discussion. Patients share experiences, express emotions, answer questions.
+TASK: Identify speakers in this transcript using chain-of-thought reasoning. Think carefully about WHO is speaking each line by analyzing discourse cues.
 
-TASK: List each unique speaker. For each, provide:
-- A primary display name (most formal version available)
-- Any aliases or alternate names used in the transcript
-- Their role (PATIENT or CLINICIAN)
-- Brief evidence for your identification
+CRITICAL DISCOURSE RULES (apply these BEFORE content analysis):
 
-Respond with ONLY a JSON array:
-[{{"id": 1, "display_name": "Dr. Dan", "aliases": ["Bob", "Dr. Bob Dan"], "role": "CLINICIAN", "evidence": "Asks therapeutic questions throughout"}}, ...]
+1. DIRECT ADDRESS: When a segment contains "Name, ..." (e.g., "Calvin, please sit down"), the speaker is NOT that person — they are ADDRESSING that person. The named person is the LISTENER.
 
-No other text. Just the JSON array.
+2. SELF-REFERENCE vs OTHER-REFERENCE: "Me and my wife are leaving" → speaker is the husband. "Your wife seems upset" → speaker is addressing the husband (likely the clinician).
 
-TRANSCRIPT:
-{transcript_text}"""
+3. INTRODUCTIONS: "This is Dr. Dan" or "Babe, this is Dr. Dan" → the speaker is introducing Dr. Dan to someone else. Dr. Dan is NOT speaking. The person making the introduction already knows both parties.
 
-    response = httpx.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {config.GROQ_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": config.LLM_MODEL,
-            "messages": [{"role": "user", "content": pass1_prompt}],
-            "max_tokens": 2000,
-            "temperature": 0.1,
-        },
-        timeout=60.0,
-    )
-    response.raise_for_status()
-    content = response.json()["choices"][0]["message"]["content"].strip()
-    if content.startswith("```"):
-        content = content.split("\n", 1)[1]
-        if content.endswith("```"):
-            content = content[:-3]
-        content = content.strip()
+4. ARRIVAL/LATENESS: If a session is already underway and someone says "Sorry I'm late", the arriving person is the new voice — NOT the person who was already speaking.
 
-    cast = json.loads(content)
+5. NAME ALIASING: A person's first name, title+last name, and nicknames may all refer to the SAME person. "Bob", "Dr. Dan", "Dr. Bob Dan" could all be one therapist. Only create a new speaker when there is STRONG evidence of a truly distinct individual.
 
-    # Build the cast description for pass 2
-    cast_description = []
-    for speaker in cast:
-        aliases_str = ", ".join(speaker.get("aliases", []))
-        name = speaker["display_name"]
-        role = speaker["role"]
-        sid = speaker["id"]
-        label = f"{name} ({role}_{sid})"
-        if aliases_str:
-            cast_description.append(f"- {label} — also known as: {aliases_str}")
-        else:
-            cast_description.append(f"- {label}")
-    cast_text = "\n".join(cast_description)
+6. PARSIMONY: Prefer FEWER speakers. A typical therapy session has 2-3 speakers. Do NOT create new speakers unless the evidence is overwhelming.
 
-    # ══════════════════════════════════════════
-    # PASS 2: Label each segment
-    # ══════════════════════════════════════════
-    pass2_prompt = f"""You are labeling a clinical transcript. The speakers have been identified:
+7. ROLE FROM BEHAVIOR: Clinicians ask therapeutic questions, guide sessions, use professional language. Patients describe personal experiences, express emotions, resist or cooperate with therapy. A spouse pressing their partner to commit to therapy is a PATIENT, not a clinician.
 
-SPEAKERS:
-{cast_text}
+8. CONTINUITY: Once you identify a speaker in a section, they remain that speaker unless there's a clear transition (new greeting, new session).
 
-RULES:
-- Assign EVERY segment to one of the speakers listed above. Do NOT invent new speakers.
-- Use conversational turn-taking: people usually alternate, but one speaker CAN have multiple consecutive segments (especially if the other is silent or non-cooperative).
-- If someone addresses a speaker by name or alias, the NEXT segment is likely from the addressed person (unless it is a rhetorical address).
-- Maintain consistency: once you identify a speaker's voice/style in a section, keep that assignment stable.
+FEW-SHOT EXAMPLE:
+Transcript:
+[0] How are we feeling today?
+[1] I don't want to be here.
+[2] Sarah, can you tell me why?
+[3] My husband made me come.
+[4] Tom, what do you think about that?
+[5] I think she needs help, doc.
+[6] I see. Let's explore that together.
 
-For each segment, respond with the speaker's id number.
-Respond with ONLY a JSON array:
-[{{"index": 0, "speaker_id": 1}}, {{"index": 1, "speaker_id": 2}}, ...]
+Reasoning:
+- [0] Opens with therapeutic question → CLINICIAN
+- [1] Expresses reluctance → PATIENT (Sarah, since [2] addresses "Sarah" about this)
+- [2] "Sarah, can you tell me" → speaker is addressing Sarah, so NOT Sarah → CLINICIAN
+- [3] "My husband made me come" → female patient speaking about husband → Sarah (PATIENT)
+- [4] "Tom, what do you think" → addressing Tom, so NOT Tom → CLINICIAN
+- [5] "she needs help, doc" → male voice, calls someone "doc" → Tom (PATIENT, husband)
+- [6] "Let's explore that together" → therapeutic guidance → CLINICIAN
 
-No other text. Just the JSON array.
+Result: 3 speakers — Dr. (CLINICIAN_1), Sarah (PATIENT_1), Tom (PATIENT_2)
+
+NOW ANALYZE THIS TRANSCRIPT:
+
+First, output your reasoning for the first 15-20 segments to establish speaker identities.
+Then, for ALL segments, output the final labels.
+
+Your response MUST end with a JSON block in this exact format:
+SPEAKERS: [list of unique speakers]
+LABELS_START
+[{{"index": 0, "speaker_id": "Dr. X (CLINICIAN_1)"}}, {{"index": 1, "speaker_id": "Name (PATIENT_1)"}}, ...]
+LABELS_END
+
+The speaker_id format must be: "DisplayName (ROLE_N)" where ROLE is PATIENT or CLINICIAN and N is the speaker number.
 
 TRANSCRIPT:
 {transcript_text}"""
@@ -268,49 +232,61 @@ TRANSCRIPT:
         },
         json={
             "model": config.LLM_MODEL,
-            "messages": [{"role": "user", "content": pass2_prompt}],
-            "max_tokens": 8000,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 12000,
             "temperature": 0.1,
         },
-        timeout=90.0,
+        timeout=120.0,
     )
     response.raise_for_status()
-    content = response.json()["choices"][0]["message"]["content"].strip()
-    if content.startswith("```"):
-        content = content.split("\n", 1)[1]
-        if content.endswith("```"):
-            content = content[:-3]
-        content = content.strip()
+    content = response.json()["choices"][0]["message"]["content"]
 
-    labels = json.loads(content)
+    # Extract the JSON labels from between LABELS_START and LABELS_END
+    labels_json = None
+    if "LABELS_START" in content and "LABELS_END" in content:
+        labels_text = content.split("LABELS_START")[1].split("LABELS_END")[0].strip()
+        labels_json = labels_text
+    else:
+        # Fallback: try to find a JSON array in the response
+        import re
+        json_match = re.search(r'\[[\s\S]*\]', content)
+        if json_match:
+            labels_json = json_match.group()
+
+    if not labels_json:
+        # Last resort: label everything as PATIENT
+        for seg in segments:
+            seg["speaker_raw"] = "PATIENT_1"
+            seg["speaker_role"] = "PATIENT"
+        return segments
+
+    # Clean markdown fences
+    labels_json = labels_json.strip()
+    if labels_json.startswith("```"):
+        labels_json = labels_json.split("\n", 1)[1]
+        if labels_json.endswith("```"):
+            labels_json = labels_json[:-3]
+        labels_json = labels_json.strip()
+
+    labels = json.loads(labels_json)
     label_map = {item["index"]: item["speaker_id"] for item in labels}
 
-    # Build speaker lookup from cast
-    speaker_lookup = {}
-    for speaker in cast:
-        sid = speaker["id"]
-        role_base = speaker["role"].upper()
-        if "CLINICIAN" in role_base or "THERAPIST" in role_base or "DOCTOR" in role_base:
-            role_base = "CLINICIAN"
-        else:
-            role_base = "PATIENT"
-        speaker_lookup[sid] = {
-            "display_name": speaker["display_name"],
-            "role_base": role_base,
-            "role_numbered": f"{role_base}_{sid}",
-        }
-
-    # Apply labels to all segments
+    # Apply labels
     for i, seg in enumerate(segments):
         if i in label_map:
-            sid = label_map[i]
+            raw = label_map[i]
         else:
             nearest = min(label_map.keys(), key=lambda x: abs(x - i))
-            sid = label_map[nearest]
+            raw = label_map[nearest]
 
-        info = speaker_lookup.get(sid, {"display_name": "Unknown", "role_base": "PATIENT", "role_numbered": "PATIENT_1"})
-        seg["speaker_raw"] = f"{info['display_name']} ({info['role_numbered']})"
-        seg["speaker_role"] = info["role_base"]
+        seg["speaker_raw"] = raw
+
+        # Extract base role for retrieval filtering
+        raw_upper = raw.upper()
+        if "CLINICIAN" in raw_upper or "THERAPIST" in raw_upper or "DOCTOR" in raw_upper:
+            seg["speaker_role"] = "CLINICIAN"
+        else:
+            seg["speaker_role"] = "PATIENT"
 
     return segments
 
