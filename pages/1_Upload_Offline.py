@@ -59,8 +59,9 @@ def transcribe_with_diarization(audio_path):
     aai_config = aai.TranscriptionConfig(
         speaker_labels=True,
         language_code="en",
+        speech_model=aai.SpeechModel.nano,
     )
-
+    
     transcriber = aai.Transcriber()
     transcript = transcriber.transcribe(audio_path, config=aai_config)
 
