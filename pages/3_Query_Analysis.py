@@ -138,28 +138,26 @@ with tab_qa:
     st.subheader("Symptom-Based Question Answering")
     st.caption("Ask questions about the interview — answers are grounded in retrieved segments.")
 
-    # Example queries
     example_queries = [
         "What symptoms did the patient report?",
-        "When did the clinician ask about medications?",
+        "What questions did the clinician ask?",
         "Does the patient have any allergies?",
         "What is the patient's chief complaint?",
         "Were any follow-up appointments discussed?",
+        "What medications were mentioned?",
+        "How did the patient describe their emotional state?",
+        "What therapeutic approaches did the clinician suggest?",
     ]
 
     query = st.text_input(
         "Enter your question",
         placeholder="What symptoms did the patient report?",
-        key="qa_query",
+        key="qa_input",
     )
 
-    st.caption("Example queries:")
-    example_cols = st.columns(3)
-    for i, eq in enumerate(example_queries):
-        with example_cols[i % 3]:
-            if st.button(eq, key=f"example_{i}", use_container_width=True):
-                st.session_state.qa_query = eq
-                st.rerun()
+    st.caption("Example queries (copy and paste into the box above):")
+    for eq in example_queries:
+        st.code(eq, language=None)
 
     if query and st.button("Search & Answer", key="btn_qa", type="primary"):
         with st.spinner(f"Searching ({retrieval_mode} mode, K={k_value})..."):
@@ -167,7 +165,6 @@ with tab_qa:
                 from retrieval.search import search
                 from llm.grounded_llm import answer_question
 
-                # Retrieve relevant segments
                 results = search(
                     query=query,
                     interview_id=interview_id,
@@ -178,18 +175,19 @@ with tab_qa:
                 )
 
                 if not results:
-                    st.warning("No relevant segments found. Try broadening your query or changing retrieval mode.")
-                else:
-                    # Generate grounded answer
+                    st.info("No lexical matches — using all segments as context.")
+                    results = db.get_segments(interview_id)
+
+                if results:
                     answer = answer_question(query, results)
                     st.markdown("### Answer")
                     st.markdown(answer)
                     st.divider()
                     display_segments(results, "Retrieved Segments")
-
+                else:
+                    st.warning("No segments found for this interview.")
             except Exception as e:
                 st.error(f"QA failed: {e}")
-
 
 # ── Tab 3: Interview Analyzer ──
 with tab_analyzer:
