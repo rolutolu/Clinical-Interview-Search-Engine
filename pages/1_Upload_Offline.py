@@ -145,16 +145,25 @@ def _whisper_api_call(audio_path, filename):
 # Helper: LLM-based speaker labeling
 def label_speakers_with_llm(segments):
     """
-    Use Groq LLM to label each segment with numbered speaker roles
-    and identify names when possible.
-    speaker_raw = display label (e.g. "Dr. Den (CLINICIAN_1)")
-    speaker_role = base role for retrieval (PATIENT/CLINICIAN)
+    Two-pass LLM speaker labeling based on DiarizationLM (Wang et al. 2024)
+    and iterative clinical interview diarization (Marie et al. 2026).
+
+    Pass 1: Identify the cast of speakers (with name aliases and roles)
+    Pass 2: Label each segment using the established cast
+
+    This prevents over-segmentation (creating too many speakers) and
+    resolves name aliases (Bob = Dr. Bob = the therapist).
     """
     import httpx
 
-    if len(segments) > 100:
-        sample_segments = segments[:80] + segments[-20:]
-        sample_indices = list(range(80)) + list(range(len(segments) - 20, len(segments)))
+    # ── Build transcript sample ──
+    if len(segments) > 120:
+        sample_segments = segments[:80] + segments[len(segments)//2 - 10 : len(segments)//2 + 10] + segments[-20:]
+        sample_indices = (
+            list(range(80))
+            + list(range(len(segments)//2 - 10, len(segments)//2 + 10))
+            + list(range(len(segments) - 20, len(segments)))
+        )
     else:
         sample_segments = segments
         sample_indices = list(range(len(segments)))
@@ -164,26 +173,26 @@ def label_speakers_with_llm(segments):
         transcript_lines.append(f"[{idx}] {seg['text']}")
     transcript_text = "\n".join(transcript_lines)
 
-    prompt = f"""You are analyzing a clinical/therapy transcript. There may be MULTIPLE clinicians and/or MULTIPLE patients. The audio may contain several separate sessions spliced together.
+    # ══════════════════════════════════════════
+    # PASS 1: Identify speaker cast
+    # ══════════════════════════════════════════
+    pass1_prompt = f"""You are a clinical transcript analyst. Your task is to identify the CAST OF SPEAKERS in this recording.
 
-Your task: For each numbered segment, identify the speaker using NUMBERED roles AND their name if you can determine it.
+IMPORTANT PRINCIPLES (from clinical diarization research):
+- PARSIMONY: Prefer FEWER speakers. Do NOT create a new speaker unless there is STRONG evidence of a distinct individual. A recording of a therapy session typically has 2-3 speakers, rarely more.
+- NAME ALIASING: The same person may be referred to by different names, titles, or nicknames. Examples: "Dr. Dan" and "Bob" could be the same therapist whose full name is Bob Dan. "Doc" and "Dr. Smith" are the same person. A first name and a title+last name often refer to the same person.
+- ROLE CONSISTENCY: If someone is acting as a therapist/clinician throughout a section, they remain a clinician even if addressed casually by first name.
+- SESSION BOUNDARIES: A recording may contain multiple therapy sessions spliced together. A shift in topic, greeting, or tone may indicate a new session — but the SAME patient can appear across sessions.
+- CONVERSATIONAL EVIDENCE: Identify speakers by HOW they speak, not just WHAT is said about them. Clinicians ask open-ended questions, reflect feelings, guide discussion. Patients share experiences, express emotions, answer questions.
 
-FORMAT:
-- First patient seen → PATIENT_1, second distinct patient → PATIENT_2, etc.
-- First clinician seen → CLINICIAN_1, second distinct clinician → CLINICIAN_2, etc.
-- If a speaker's name is mentioned or clearly implied in the transcript (e.g. "Hi Calvin", "Dr. Smith", "thanks doc Adams"), include it in the "name" field. Use the name as it appears — first name, last name, or title+name.
-- If you cannot confidently determine a name, set "name" to null.
+TASK: List each unique speaker. For each, provide:
+- A primary display name (most formal version available)
+- Any aliases or alternate names used in the transcript
+- Their role (PATIENT or CLINICIAN)
+- Brief evidence for your identification
 
-IDENTIFICATION RULES:
-- CLINICIAN: asks probing questions, gives professional guidance, uses therapeutic language, makes clinical observations, directs the conversation professionally
-- PATIENT: describes personal experiences, expresses emotions, answers questions about themselves, reports symptoms, shows vulnerability or resistance
-- A recording may contain MULTIPLE sessions with DIFFERENT therapists — each new professional voice is a new CLINICIAN_N
-- If a patient is non-verbal or non-cooperative, the clinician may speak for extended stretches — consecutive segments from the same speaker are normal
-- Track speaker identity by voice/style consistency — if the same clinician asks questions across multiple segments, they keep the same number
-- When the conversation clearly shifts to a new session (new greeting, different tone, topic reset), consider whether new speakers have appeared
-
-Respond with ONLY a JSON array, one object per segment:
-[{{"index": 0, "role": "PATIENT_1", "name": "Calvin"}}, {{"index": 1, "role": "CLINICIAN_1", "name": "Dr. Den"}}, {{"index": 2, "role": "CLINICIAN_2", "name": null}}, ...]
+Respond with ONLY a JSON array:
+[{{"id": 1, "display_name": "Dr. Dan", "aliases": ["Bob", "Dr. Bob Dan"], "role": "CLINICIAN", "evidence": "Asks therapeutic questions throughout"}}, ...]
 
 No other text. Just the JSON array.
 
@@ -198,16 +207,75 @@ TRANSCRIPT:
         },
         json={
             "model": config.LLM_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": pass1_prompt}],
+            "max_tokens": 2000,
+            "temperature": 0.1,
+        },
+        timeout=60.0,
+    )
+    response.raise_for_status()
+    content = response.json()["choices"][0]["message"]["content"].strip()
+    if content.startswith("```"):
+        content = content.split("\n", 1)[1]
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+
+    cast = json.loads(content)
+
+    # Build the cast description for pass 2
+    cast_description = []
+    for speaker in cast:
+        aliases_str = ", ".join(speaker.get("aliases", []))
+        name = speaker["display_name"]
+        role = speaker["role"]
+        sid = speaker["id"]
+        label = f"{name} ({role}_{sid})"
+        if aliases_str:
+            cast_description.append(f"- {label} — also known as: {aliases_str}")
+        else:
+            cast_description.append(f"- {label}")
+    cast_text = "\n".join(cast_description)
+
+    # ══════════════════════════════════════════
+    # PASS 2: Label each segment
+    # ══════════════════════════════════════════
+    pass2_prompt = f"""You are labeling a clinical transcript. The speakers have been identified:
+
+SPEAKERS:
+{cast_text}
+
+RULES:
+- Assign EVERY segment to one of the speakers listed above. Do NOT invent new speakers.
+- Use conversational turn-taking: people usually alternate, but one speaker CAN have multiple consecutive segments (especially if the other is silent or non-cooperative).
+- If someone addresses a speaker by name or alias, the NEXT segment is likely from the addressed person (unless it is a rhetorical address).
+- Maintain consistency: once you identify a speaker's voice/style in a section, keep that assignment stable.
+
+For each segment, respond with the speaker's id number.
+Respond with ONLY a JSON array:
+[{{"index": 0, "speaker_id": 1}}, {{"index": 1, "speaker_id": 2}}, ...]
+
+No other text. Just the JSON array.
+
+TRANSCRIPT:
+{transcript_text}"""
+
+    response = httpx.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {config.GROQ_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": config.LLM_MODEL,
+            "messages": [{"role": "user", "content": pass2_prompt}],
             "max_tokens": 8000,
             "temperature": 0.1,
         },
         timeout=90.0,
     )
     response.raise_for_status()
-    content = response.json()["choices"][0]["message"]["content"]
-
-    content = content.strip()
+    content = response.json()["choices"][0]["message"]["content"].strip()
     if content.startswith("```"):
         content = content.split("\n", 1)[1]
         if content.endswith("```"):
@@ -215,37 +283,34 @@ TRANSCRIPT:
         content = content.strip()
 
     labels = json.loads(content)
-    label_map = {item["index"]: item for item in labels}
+    label_map = {item["index"]: item["speaker_id"] for item in labels}
 
-    # Build a name lookup: role → name (from first confident identification)
-    name_lookup = {}
-    for item in labels:
-        role = item.get("role", "").upper()
-        name = item.get("name")
-        if name and role and role not in name_lookup:
-            name_lookup[role] = name
+    # Build speaker lookup from cast
+    speaker_lookup = {}
+    for speaker in cast:
+        sid = speaker["id"]
+        role_base = speaker["role"].upper()
+        if "CLINICIAN" in role_base or "THERAPIST" in role_base or "DOCTOR" in role_base:
+            role_base = "CLINICIAN"
+        else:
+            role_base = "PATIENT"
+        speaker_lookup[sid] = {
+            "display_name": speaker["display_name"],
+            "role_base": role_base,
+            "role_numbered": f"{role_base}_{sid}",
+        }
 
+    # Apply labels to all segments
     for i, seg in enumerate(segments):
         if i in label_map:
-            item = label_map[i]
+            sid = label_map[i]
         else:
             nearest = min(label_map.keys(), key=lambda x: abs(x - i))
-            item = label_map[nearest]
+            sid = label_map[nearest]
 
-        role_numbered = item.get("role", "PATIENT_1").upper()
-        name = item.get("name") or name_lookup.get(role_numbered)
-
-        # speaker_raw = display label
-        if name:
-            seg["speaker_raw"] = f"{name} ({role_numbered})"
-        else:
-            seg["speaker_raw"] = role_numbered
-
-        # speaker_role = base role for retrieval filtering
-        if "CLINICIAN" in role_numbered or "THERAPIST" in role_numbered or "DOCTOR" in role_numbered:
-            seg["speaker_role"] = "CLINICIAN"
-        else:
-            seg["speaker_role"] = "PATIENT"
+        info = speaker_lookup.get(sid, {"display_name": "Unknown", "role_base": "PATIENT", "role_numbered": "PATIENT_1"})
+        seg["speaker_raw"] = f"{info['display_name']} ({info['role_numbered']})"
+        seg["speaker_role"] = info["role_base"]
 
     return segments
 
