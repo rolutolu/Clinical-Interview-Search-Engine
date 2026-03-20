@@ -29,3 +29,4 @@ plotly>=5.15.0
 # ── Audio Processing (chunking large files) ──
 pydub>=0.25.1
 ffmpeg-python>=0.2.0
+assemblyai>=0.35.0
