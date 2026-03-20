@@ -1,12 +1,12 @@
 """
 Page 1: Upload & Offline Pipeline
 
-TWO MODES:
-  - Cloud mode (no GPU): Groq Whisper transcription (with auto-chunking
-    for files over 25 MB) + Groq LLM speaker labeling
-  - Full mode (GPU): Pyannote diarization + Whisper + alignment
+Uses AssemblyAI for acoustic speaker diarization (who spoke when based on voice)
+then Groq LLM for semantic role labeling (which speaker is PATIENT vs CLINICIAN).
 
-Both are fully automatic — no manual speaker assignment needed.
+This hybrid approach combines:
+- Acoustic accuracy: voice embeddings reliably separate distinct speakers
+- Semantic intelligence: LLM identifies clinical roles from conversation content
 """
 
 import streamlit as st
@@ -26,203 +26,111 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ── Detect environment ──
-_HAS_TORCH = False
-try:
-    import torch
-    _HAS_TORCH = torch.cuda.is_available()
-except ImportError:
-    pass
-
-if _HAS_TORCH:
-    st.success("GPU detected — full pipeline (pyannote diarization + transcription).")
-else:
-    st.info(
-        "Running in **cloud mode**: Groq Whisper transcription + LLM-based speaker labeling. "
-        "Large files are automatically split into chunks."
+# Check AssemblyAI config
+if not config.ASSEMBLYAI_API_KEY:
+    st.warning(
+        "AssemblyAI API key not set. Add `ASSEMBLYAI_API_KEY` to your Streamlit secrets. "
+        "Get a free key at https://www.assemblyai.com (100 hours free)."
     )
 
+# ══════════════════════════════════════════
 # Session State
-for key in [
-    "interview_id", "transcription_segments", "aligned_segments",
-    "diarization_segments", "speakers_detected",
-]:
+# ══════════════════════════════════════════
+for key in ["interview_id", "aligned_segments", "speakers_detected"]:
     if key not in st.session_state:
         st.session_state[key] = None if key != "speakers_detected" else []
 if "processing_complete" not in st.session_state:
     st.session_state.processing_complete = False
 
-GROQ_CHUNK_LIMIT_MB = 24  # Stay under Groq's 25 MB limit
 
-
-# Helper: Chunked Whisper transcription
-def transcribe_audio(audio_path, filename, status_writer):
+# ══════════════════════════════════════════
+# Core: AssemblyAI transcription + diarization
+# ══════════════════════════════════════════
+def transcribe_with_diarization(audio_path):
     """
-    Transcribe audio via Groq Whisper API.
-    Automatically splits files over 24 MB into chunks using ffmpeg.
+    Use AssemblyAI to transcribe audio WITH acoustic speaker diarization.
+    Returns list of utterances with speaker labels and timestamps.
+    No GPU needed — this is a cloud API call.
     """
-    import subprocess
+    import assemblyai as aai
 
-    file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+    aai.settings.api_key = config.ASSEMBLYAI_API_KEY
 
-    if file_size_mb <= GROQ_CHUNK_LIMIT_MB:
-        status_writer(f"Transcribing ({file_size_mb:.1f} MB)...")
-        return _whisper_api_call(audio_path, filename)
-    else:
-        # Get duration using ffprobe
-        result = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-             "-of", "csv=p=0", audio_path],
-            capture_output=True, text=True
-        )
-        total_duration = float(result.stdout.strip())
+    aai_config = aai.TranscriptionConfig(
+        speaker_labels=True,
+        language_code="en",
+    )
 
-        # Calculate how many chunks we need
-        num_chunks = math.ceil(file_size_mb / GROQ_CHUNK_LIMIT_MB)
-        chunk_duration = total_duration / num_chunks
+    transcriber = aai.Transcriber()
+    transcript = transcriber.transcribe(audio_path, config=aai_config)
 
-        status_writer(f"File is {file_size_mb:.1f} MB — splitting into {num_chunks} chunks...")
+    if transcript.status == aai.TranscriptStatus.error:
+        raise Exception(f"AssemblyAI error: {transcript.error}")
 
-        all_segments = []
-        for i in range(num_chunks):
-            start_sec = i * chunk_duration
-            chunk_path = os.path.join(tempfile.gettempdir(), f"chunk_{i:02d}.wav")
-
-            # Split with ffmpeg
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", audio_path, "-ss", str(start_sec),
-                 "-t", str(chunk_duration), "-ar", "16000", "-ac", "1", chunk_path],
-                capture_output=True
-            )
-
-            chunk_size_mb = os.path.getsize(chunk_path) / (1024 * 1024)
-            status_writer(f"  Chunk {i+1}/{num_chunks} ({chunk_size_mb:.1f} MB)...")
-
-            try:
-                chunk_segments = _whisper_api_call(chunk_path, f"chunk_{i:02d}.wav")
-                offset_ms = int(start_sec * 1000)
-                for seg in chunk_segments:
-                    seg["start_ms"] += offset_ms
-                    seg["end_ms"] += offset_ms
-                all_segments.extend(chunk_segments)
-            finally:
-                if os.path.exists(chunk_path):
-                    os.unlink(chunk_path)
-
-        status_writer(f"Transcription complete — {len(all_segments)} segments from {num_chunks} chunks.")
-        return all_segments
-
-
-def _whisper_api_call(audio_path, filename):
-    """Single Groq Whisper API call."""
-    import httpx
-
-    with open(audio_path, "rb") as f:
-        response = httpx.post(
-            "https://api.groq.com/openai/v1/audio/transcriptions",
-            headers={"Authorization": f"Bearer {config.GROQ_API_KEY}"},
-            files={"file": (filename, f)},
-            data={
-                "model": config.WHISPER_MODEL,
-                "language": "en",
-                "response_format": "verbose_json",
-                "timestamp_granularities[]": "segment",
-            },
-            timeout=120.0,
-        )
-    response.raise_for_status()
-    result = response.json()
-
-    segments = []
-    for seg in result.get("segments", []):
-        segments.append({
-            "start_ms": int(seg["start"] * 1000),
-            "end_ms": int(seg["end"] * 1000),
-            "text": seg["text"].strip(),
+    utterances = []
+    for utt in transcript.utterances:
+        utterances.append({
+            "start_ms": utt.start,
+            "end_ms": utt.end,
+            "text": utt.text.strip(),
+            "speaker": utt.speaker,  # "A", "B", "C", etc.
         })
-    return segments
 
-# Helper: LLM-based speaker labeling
-def label_speakers_with_llm(segments):
+    return utterances
+
+
+# ══════════════════════════════════════════
+# Core: LLM role labeling on acoustically-separated speakers
+# ══════════════════════════════════════════
+def label_roles_with_llm(utterances):
     """
-    Single-pass LLM speaker labeling with chain-of-thought reasoning
-    and a few-shot discourse analysis example.
+    Takes acoustically-separated utterances (Speaker A, B, C from AssemblyAI)
+    and uses Groq LLM to identify roles (PATIENT/CLINICIAN) and names.
 
-    Based on: Wei et al. 2022 (CoT prompting), DiarizationLM (Wang et al. 2024),
-    and discourse pragmatics principles for turn-taking analysis.
+    This is MUCH more accurate than pure-LLM diarization because the acoustic
+    model already correctly separated the voices — the LLM only needs to
+    figure out which voice is the doctor vs the patient.
     """
     import httpx
 
-    if len(segments) > 120:
-        sample_segments = segments[:90] + segments[-30:]
-        sample_indices = list(range(90)) + list(range(len(segments) - 30, len(segments)))
-    else:
-        sample_segments = segments
-        sample_indices = list(range(len(segments)))
+    # Build a summary of what each speaker said
+    speaker_samples = {}
+    for utt in utterances:
+        spk = utt["speaker"]
+        if spk not in speaker_samples:
+            speaker_samples[spk] = []
+        if len(speaker_samples[spk]) < 8:
+            speaker_samples[spk].append(utt["text"])
 
-    transcript_lines = []
-    for idx, seg in zip(sample_indices, sample_segments):
-        transcript_lines.append(f"[{idx}] {seg['text']}")
-    transcript_text = "\n".join(transcript_lines)
+    # Build speaker summaries
+    speaker_summary_lines = []
+    for spk in sorted(speaker_samples.keys()):
+        samples = speaker_samples[spk]
+        count = sum(1 for u in utterances if u["speaker"] == spk)
+        sample_text = " | ".join(samples)
+        speaker_summary_lines.append(f"Speaker {spk} ({count} utterances): {sample_text}")
+    speaker_summary = "\n".join(speaker_summary_lines)
 
-    prompt = f"""You are an expert in discourse analysis and conversational pragmatics, specializing in clinical and therapy transcripts.
+    prompt = f"""You are analyzing a clinical/therapy transcript where speakers have been acoustically separated by voice analysis. Each speaker label (A, B, C, etc.) represents a DISTINCT voice — the acoustic model has already determined who is who based on their voice.
 
-TASK: Identify speakers in this transcript using chain-of-thought reasoning. Think carefully about WHO is speaking each line by analyzing discourse cues.
+Your task: For each acoustic speaker, determine their ROLE and NAME.
 
-CRITICAL DISCOURSE RULES (apply these BEFORE content analysis):
+SPEAKERS DETECTED (with sample utterances):
+{speaker_summary}
 
-1. DIRECT ADDRESS: When a segment contains "Name, ..." (e.g., "Calvin, please sit down"), the speaker is NOT that person — they are ADDRESSING that person. The named person is the LISTENER.
+RULES:
+1. Each acoustic speaker (A, B, C) is a DISTINCT person — trust the voice separation
+2. CLINICIAN: asks therapeutic/diagnostic questions, gives professional guidance, directs the conversation
+3. PATIENT: describes personal experiences, expresses emotions, answers questions about themselves
+4. A spouse pushing their partner to engage in therapy is a PATIENT, not a clinician
+5. If a name is mentioned or clearly implied, include it. "Dr. Dan", "Bob", etc.
+6. NAME ALIASING: If the same acoustic speaker is called different names, they are the same person (e.g., "Bob" and "Dr. Dan" for Speaker A means their full name is Dr. Bob Dan)
+7. If you cannot determine a name, use "Unknown"
 
-2. SELF-REFERENCE vs OTHER-REFERENCE: "Me and my wife are leaving" → speaker is the husband. "Your wife seems upset" → speaker is addressing the husband (likely the clinician).
+Respond with ONLY a JSON array, one object per acoustic speaker:
+[{{"speaker": "A", "role": "CLINICIAN", "name": "Dr. Dan", "reasoning": "Asks therapeutic questions, directs sessions"}}, {{"speaker": "B", "role": "PATIENT", "name": "Calvin", "reasoning": "Expresses reluctance, describes personal experiences"}}]
 
-3. INTRODUCTIONS: "This is Dr. Dan" or "Babe, this is Dr. Dan" → the speaker is introducing Dr. Dan to someone else. Dr. Dan is NOT speaking. The person making the introduction already knows both parties.
-
-4. ARRIVAL/LATENESS: If a session is already underway and someone says "Sorry I'm late", the arriving person is the new voice — NOT the person who was already speaking.
-
-5. NAME ALIASING: A person's first name, title+last name, and nicknames may all refer to the SAME person. "Bob", "Dr. Dan", "Dr. Bob Dan" could all be one therapist. Only create a new speaker when there is STRONG evidence of a truly distinct individual.
-
-6. PARSIMONY: Prefer FEWER speakers. A typical therapy session has 2-3 speakers. Do NOT create new speakers unless the evidence is overwhelming.
-
-7. ROLE FROM BEHAVIOR: Clinicians ask therapeutic questions, guide sessions, use professional language. Patients describe personal experiences, express emotions, resist or cooperate with therapy. A spouse pressing their partner to commit to therapy is a PATIENT, not a clinician.
-
-8. CONTINUITY: Once you identify a speaker in a section, they remain that speaker unless there's a clear transition (new greeting, new session).
-
-FEW-SHOT EXAMPLE:
-Transcript:
-[0] How are we feeling today?
-[1] I don't want to be here.
-[2] Sarah, can you tell me why?
-[3] My husband made me come.
-[4] Tom, what do you think about that?
-[5] I think she needs help, doc.
-[6] I see. Let's explore that together.
-
-Reasoning:
-- [0] Opens with therapeutic question → CLINICIAN
-- [1] Expresses reluctance → PATIENT (Sarah, since [2] addresses "Sarah" about this)
-- [2] "Sarah, can you tell me" → speaker is addressing Sarah, so NOT Sarah → CLINICIAN
-- [3] "My husband made me come" → female patient speaking about husband → Sarah (PATIENT)
-- [4] "Tom, what do you think" → addressing Tom, so NOT Tom → CLINICIAN
-- [5] "she needs help, doc" → male voice, calls someone "doc" → Tom (PATIENT, husband)
-- [6] "Let's explore that together" → therapeutic guidance → CLINICIAN
-
-Result: 3 speakers — Dr. (CLINICIAN_1), Sarah (PATIENT_1), Tom (PATIENT_2)
-
-NOW ANALYZE THIS TRANSCRIPT:
-
-First, output your reasoning for the first 15-20 segments to establish speaker identities.
-Then, for ALL segments, output the final labels.
-
-Your response MUST end with a JSON block in this exact format:
-SPEAKERS: [list of unique speakers]
-LABELS_START
-[{{"index": 0, "speaker_id": "Dr. X (CLINICIAN_1)"}}, {{"index": 1, "speaker_id": "Name (PATIENT_1)"}}, ...]
-LABELS_END
-
-The speaker_id format must be: "DisplayName (ROLE_N)" where ROLE is PATIENT or CLINICIAN and N is the speaker number.
-
-TRANSCRIPT:
-{transcript_text}"""
+No other text. Just the JSON array."""
 
     response = httpx.post(
         "https://api.groq.com/openai/v1/chat/completions",
@@ -233,64 +141,53 @@ TRANSCRIPT:
         json={
             "model": config.LLM_MODEL,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 12000,
+            "max_tokens": 2000,
             "temperature": 0.1,
         },
-        timeout=120.0,
+        timeout=60.0,
     )
     response.raise_for_status()
-    content = response.json()["choices"][0]["message"]["content"]
+    content = response.json()["choices"][0]["message"]["content"].strip()
 
-    # Extract the JSON labels from between LABELS_START and LABELS_END
-    labels_json = None
-    if "LABELS_START" in content and "LABELS_END" in content:
-        labels_text = content.split("LABELS_START")[1].split("LABELS_END")[0].strip()
-        labels_json = labels_text
-    else:
-        # Fallback: try to find a JSON array in the response
-        import re
-        json_match = re.search(r'\[[\s\S]*\]', content)
-        if json_match:
-            labels_json = json_match.group()
+    if content.startswith("```"):
+        content = content.split("\n", 1)[1]
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
 
-    if not labels_json:
-        # Last resort: label everything as PATIENT
-        for seg in segments:
-            seg["speaker_raw"] = "PATIENT_1"
-            seg["speaker_role"] = "PATIENT"
-        return segments
+    cast = json.loads(content)
 
-    # Clean markdown fences
-    labels_json = labels_json.strip()
-    if labels_json.startswith("```"):
-        labels_json = labels_json.split("\n", 1)[1]
-        if labels_json.endswith("```"):
-            labels_json = labels_json[:-3]
-        labels_json = labels_json.strip()
-
-    labels = json.loads(labels_json)
-    label_map = {item["index"]: item["speaker_id"] for item in labels}
-
-    # Apply labels
-    for i, seg in enumerate(segments):
-        if i in label_map:
-            raw = label_map[i]
+    # Build lookup: acoustic speaker → display label + role
+    speaker_map = {}
+    for entry in cast:
+        spk = entry["speaker"]
+        role = entry["role"].upper()
+        name = entry.get("name", "Unknown")
+        if "CLINICIAN" in role or "THERAPIST" in role or "DOCTOR" in role:
+            role_base = "CLINICIAN"
         else:
-            nearest = min(label_map.keys(), key=lambda x: abs(x - i))
-            raw = label_map[nearest]
+            role_base = "PATIENT"
 
-        seg["speaker_raw"] = raw
+        # Count how many of this role we've seen
+        role_count = sum(1 for v in speaker_map.values() if v["role_base"] == role_base) + 1
+        role_numbered = f"{role_base}_{role_count}"
 
-        # Extract base role for retrieval filtering
-        raw_upper = raw.upper()
-        if "CLINICIAN" in raw_upper or "THERAPIST" in raw_upper or "DOCTOR" in raw_upper:
-            seg["speaker_role"] = "CLINICIAN"
+        if name and name != "Unknown":
+            display = f"{name} ({role_numbered})"
         else:
-            seg["speaker_role"] = "PATIENT"
+            display = role_numbered
 
-    return segments
+        speaker_map[spk] = {
+            "display": display,
+            "role_base": role_base,
+        }
 
+    return speaker_map
+
+
+# ══════════════════════════════════════════
 # Step 1: Patient Profile
+# ══════════════════════════════════════════
 st.subheader("Step 1: Patient Profile (Optional)")
 with st.expander("Enter Patient Profile", expanded=False):
     col1, col2 = st.columns(2)
@@ -302,12 +199,14 @@ with st.expander("Enter Patient Profile", expanded=False):
         input_method = st.selectbox("Input Method", ["text", "voice"])
     medical_history = st.text_area("Medical History", placeholder="Relevant history...", height=100)
 
+# ══════════════════════════════════════════
 # Step 2: Upload Audio
+# ══════════════════════════════════════════
 st.subheader("Step 2: Upload Interview Audio")
 uploaded_file = st.file_uploader(
     "Upload clinical interview recording",
     type=["wav", "mp3", "ogg", "flac", "m4a"],
-    help=f"Max {config.MAX_AUDIO_SIZE_MB} MB. Files over 25 MB are automatically chunked.",
+    help=f"Max {config.MAX_AUDIO_SIZE_MB} MB. AssemblyAI handles files of any size.",
 )
 
 if uploaded_file:
@@ -316,10 +215,10 @@ if uploaded_file:
     st.caption(f"{uploaded_file.name} — {file_size_mb:.1f} MB")
     if file_size_mb > config.MAX_AUDIO_SIZE_MB:
         st.error(f"File exceeds {config.MAX_AUDIO_SIZE_MB} MB limit.")
-    elif file_size_mb > GROQ_CHUNK_LIMIT_MB:
-        st.caption(f"File will be split into ~{math.ceil(file_size_mb / GROQ_CHUNK_LIMIT_MB)} chunks for transcription.")
 
+# ══════════════════════════════════════════
 # Step 3: Process
+# ══════════════════════════════════════════
 st.subheader("Step 3: Process Interview")
 
 if uploaded_file and st.button("Run Offline Pipeline", type="primary", use_container_width=True):
@@ -365,193 +264,65 @@ if uploaded_file and st.button("Run Offline Pipeline", type="primary", use_conta
                 db.create_profile(profile)
                 st.write("Patient profile saved.")
 
-            # ── Transcription (with auto-chunking) ──
+            # ── Step A: AssemblyAI transcription + acoustic diarization ──
+            st.write("Transcribing and diarizing with AssemblyAI (acoustic speaker separation)...")
             try:
-                raw_segments = transcribe_audio(
-                    tmp_path, uploaded_file.name, st.write
+                utterances = transcribe_with_diarization(tmp_path)
+                unique_speakers = sorted(set(u["speaker"] for u in utterances))
+                st.write(
+                    f"Transcription complete — {len(utterances)} utterances, "
+                    f"{len(unique_speakers)} speakers detected acoustically."
                 )
-
-                trans_segments = []
-                for seg in raw_segments:
-                    trans_segments.append({
-                        "segment_id": str(uuid.uuid4())[:8],
-                        "interview_id": interview_id,
-                        "start_ms": seg["start_ms"],
-                        "end_ms": seg["end_ms"],
-                        "text": seg["text"],
-                        "source_mode": "offline",
-                        "keywords": [],
-                        "speaker_raw": "",
-                        "speaker_role": "",
-                    })
-                st.write(f"Total: {len(trans_segments)} transcript segments.")
             except Exception as e:
-                st.error(f"Transcription failed: {e}")
+                st.error(f"AssemblyAI failed: {e}")
                 status.update(label="Pipeline failed at transcription", state="error")
                 st.stop()
 
-            # ── Speaker labeling ──
-            diar_succeeded = False
+            # ── Step B: LLM role labeling ──
+            st.write("Identifying speaker roles and names with LLM analysis...")
+            try:
+                speaker_map = label_roles_with_llm(utterances)
+                for spk, info in speaker_map.items():
+                    st.write(f"  Speaker {spk} → **{info['display']}**")
+            except Exception as e:
+                st.warning(f"LLM labeling failed: {e}. Using acoustic labels only.")
+                speaker_map = {}
+                for i, spk in enumerate(unique_speakers):
+                    speaker_map[spk] = {
+                        "display": f"SPEAKER_{spk}",
+                        "role_base": "PATIENT" if i > 0 else "CLINICIAN",
+                    }
 
-            if _HAS_TORCH:
-                st.write("Running pyannote speaker diarization (GPU)...")
-                try:
-                    import numpy as np
-                    np.NaN = np.nan
-                    np.NAN = np.nan
-                    from pyannote.audio import Pipeline as PyannotePipeline
-                    from huggingface_hub import login
+            # ── Step C: Build and save segments ──
+            st.write("Saving segments to database...")
+            segments_to_insert = []
+            for utt in utterances:
+                spk = utt["speaker"]
+                info = speaker_map.get(spk, {"display": f"SPEAKER_{spk}", "role_base": "PATIENT"})
+                segments_to_insert.append(Segment(
+                    interview_id=interview_id,
+                    segment_id=str(uuid.uuid4())[:8],
+                    start_ms=utt["start_ms"],
+                    end_ms=utt["end_ms"],
+                    speaker_raw=info["display"],
+                    speaker_role=info["role_base"],
+                    text=utt["text"],
+                    source_mode="offline",
+                ))
 
-                    login(token=config.HF_TOKEN, add_to_git_credential=False)
-                    device = torch.device("cuda")
-                    diar_pipeline = PyannotePipeline.from_pretrained(
-                        "pyannote/speaker-diarization-3.1"
-                    ).to(device)
-
-                    diar_result = diar_pipeline(tmp_path)
-                    diar_segments = []
-                    for segment, _track, speaker in diar_result.itertracks(yield_label=True):
-                        diar_segments.append({
-                            "start_ms": int(segment.start * 1000),
-                            "end_ms": int(segment.end * 1000),
-                            "speaker": speaker,
-                        })
-
-                    speaker_durations = {}
-                    for d in diar_segments:
-                        spk = d["speaker"]
-                        speaker_durations[spk] = speaker_durations.get(spk, 0) + (d["end_ms"] - d["start_ms"])
-                    default_speaker = max(speaker_durations, key=speaker_durations.get)
-
-                    for t_seg in trans_segments:
-                        best_speaker = default_speaker
-                        max_overlap = 0
-                        for d_seg in diar_segments:
-                            overlap = max(0, min(t_seg["end_ms"], d_seg["end_ms"]) - max(t_seg["start_ms"], d_seg["start_ms"]))
-                            if overlap > max_overlap:
-                                max_overlap = overlap
-                                best_speaker = d_seg["speaker"]
-                        t_seg["speaker_raw"] = best_speaker
-
-                    unique_speakers = sorted(set(s["speaker_raw"] for s in trans_segments))
-                    st.write(f"Diarization complete — {len(unique_speakers)} speakers.")
-                    diar_succeeded = True
-                except Exception as e:
-                    st.warning(f"Diarization failed: {e}. Falling back to LLM labeling.")
-
-            if not diar_succeeded:
-                st.write("Labeling speakers using Groq LLM analysis...")
-                try:
-                    trans_segments = label_speakers_with_llm(trans_segments)
-                    st.write("LLM speaker labeling complete.")
-                except Exception as e:
-                    st.warning(f"LLM labeling failed: {e}. All segments labeled as PATIENT.")
-                    for seg in trans_segments:
-                        seg["speaker_raw"] = "PATIENT"
-                        seg["speaker_role"] = "PATIENT"
-
-            st.session_state.aligned_segments = trans_segments
-
-            if diar_succeeded:
-                unique_speakers = sorted(set(s["speaker_raw"] for s in trans_segments))
-                st.session_state.speakers_detected = unique_speakers
-                status.update(label="Diarization complete — assign speaker roles below.", state="complete")
-            else:
-                speaker_map = {"PATIENT": "PATIENT", "CLINICIAN": "CLINICIAN"}
-                segments_to_insert = []
-                for seg in trans_segments:
-                    segments_to_insert.append(Segment(
-                        interview_id=seg["interview_id"],
-                        segment_id=seg["segment_id"],
-                        start_ms=seg["start_ms"],
-                        end_ms=seg["end_ms"],
-                        speaker_raw=seg["speaker_raw"],
-                        speaker_role=seg["speaker_role"],
-                        text=seg["text"],
-                        source_mode=seg["source_mode"],
-                    ))
-
-                # ── Generate Embeddings ──
-                try:
-                    from retrieval.embeddings import generate_embeddings_batch
-                    st.write("Generating vector embeddings for semantic search...")
-                    texts = [seg["text"] for seg in trans_segments]
-                    embeddings = generate_embeddings_batch(texts)
-                    for seg, emb in zip(segments_to_insert, embeddings):
-                        seg.embedding = emb
-                except Exception as e:
-                    st.warning(f"Embedding generation failed: {e}. Segments will be saved without embeddings (semantic search won't work for this interview).")
-
-                count = db.insert_segments(segments_to_insert)
-                db.update_interview_speaker_map(interview_id, speaker_map)
-                st.session_state.processing_complete = True
-                status.update(label=f"Complete — {count} segments saved!", state="complete")
+            count = db.insert_segments(segments_to_insert)
+            role_map = {info["display"]: info["role_base"] for info in speaker_map.values()}
+            db.update_interview_speaker_map(interview_id, role_map)
+            st.session_state.processing_complete = True
+            status.update(label=f"Complete — {count} segments saved!", state="complete")
 
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
-# Step 4: Speaker Role Mapping (pyannote path only)
-if (st.session_state.aligned_segments
-        and not st.session_state.processing_complete
-        and st.session_state.speakers_detected):
-    st.subheader("Step 4: Map Speakers to Roles")
-
-    speakers = st.session_state.speakers_detected
-    speaker_map = {}
-    cols = st.columns(min(len(speakers), 4))
-    for i, speaker in enumerate(speakers):
-        with cols[i % len(cols)]:
-            sample_texts = [
-                s["text"] for s in st.session_state.aligned_segments
-                if s["speaker_raw"] == speaker
-            ][:3]
-            st.markdown(f"**{speaker}**")
-            for t in sample_texts:
-                st.caption(f'"{t[:80]}..."' if len(t) > 80 else f'"{t}"')
-            role = st.selectbox(
-                f"Role for {speaker}",
-                config.SPEAKER_ROLES,
-                key=f"role_{speaker}",
-            )
-            speaker_map[speaker] = role
-
-    if st.button("Confirm Roles & Save Segments", type="primary", use_container_width=True):
-        from database.supabase_client import SupabaseClient
-        from database.models import Segment
-
-        db = SupabaseClient()
-        segments_to_insert = []
-        for seg in st.session_state.aligned_segments:
-            seg["speaker_role"] = speaker_map.get(seg["speaker_raw"], "PATIENT")
-            segments_to_insert.append(Segment(
-                interview_id=seg["interview_id"],
-                segment_id=seg["segment_id"],
-                start_ms=seg["start_ms"],
-                end_ms=seg["end_ms"],
-                speaker_raw=seg["speaker_raw"],
-                speaker_role=seg["speaker_role"],
-                text=seg["text"],
-                source_mode=seg["source_mode"],
-            ))
-
-        # ── Generate Embeddings ──
-        try:
-            from retrieval.embeddings import generate_embeddings_batch
-            st.write("Generating vector embeddings for semantic search...")
-            texts = [seg.text for seg in segments_to_insert]
-            embeddings = generate_embeddings_batch(texts)
-            for seg, emb in zip(segments_to_insert, embeddings):
-                seg.embedding = emb
-        except Exception as e:
-            st.warning(f"Embedding generation failed: {e}. Segments will be saved without embeddings (semantic search won't work for this interview).")
-
-        count = db.insert_segments(segments_to_insert)
-        db.update_interview_speaker_map(st.session_state.interview_id, speaker_map)
-        st.session_state.processing_complete = True
-        st.success(f"{count} segments saved to database!")
-
-# Step 5: View Results
+# ══════════════════════════════════════════
+# Step 4: View Results
+# ══════════════════════════════════════════
 if st.session_state.processing_complete:
     st.subheader("Interview Transcript")
     from database.supabase_client import SupabaseClient
