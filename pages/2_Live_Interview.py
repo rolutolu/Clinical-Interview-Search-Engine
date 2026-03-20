@@ -10,6 +10,7 @@ The Streamlit Cloud version displays the architecture and setup instructions.
 
 import streamlit as st
 import config
+import pandas as pd
 
 st.set_page_config(page_title="Live Interview", page_icon="LI", layout="wide")
 
@@ -227,5 +228,3 @@ st.dataframe(
     pd.DataFrame(comparison_data).set_index("Feature"),
     use_container_width=True,
 )
-
-import pandas as pd
