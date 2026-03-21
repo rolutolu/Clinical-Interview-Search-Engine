@@ -349,17 +349,6 @@ with st.expander("Step 2: Conduct a Live Interview"):
 7. Go to **Query Analysis** to search and analyze the live interview
     """)
 
-with st.expander("Step 3: Record Demo Video"):
-    st.markdown("""
-For the course submission, record a **5-10 minute video** showing:
-1. LiveKit room creation with tokens generated
-2. Two participants joining in separate browser tabs
-3. Live audio working (speak into mic in each tab)
-4. Audio tracks uploaded and processed
-5. Segments appearing in the database with perfect speaker labels
-6. Query Analysis page showing results from the live interview
-    """)
-
 # ══════════════════════════════════════════
 # Comparison Table
 # ══════════════════════════════════════════
