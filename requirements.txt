@@ -1,32 +1,44 @@
-# ═══════════════════════════════════════════
-# Clinical Interview IR System — Streamlit Cloud Dependencies
-# ═══════════════════════════════════════════
-# This file is used by Streamlit Cloud for deployment.
-# It includes ONLY the lightweight packages needed for the web UI.
-#
-# For full local/Colab development (with pyannote, torch, etc.):
-#   pip install -r requirements-full.txt
-# ═══════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+# Clinical Interview IR System — Local/Grading Dependencies
+# ═══════════════════════════════════════════════════════════
+# Full stack for local development with GPU support.
+# Install: pip install -r requirements-local.txt
+# ═══════════════════════════════════════════════════════════
 
 # ── Core ──
 streamlit>=1.28.0
 python-dotenv>=1.0.0
-pandas>=2.0.0
-numpy>=1.24.0
+pandas>=2.0.0,<3.0.0
+numpy==1.26.4
 
 # ── Database ──
 supabase>=2.0.0
 
-# ── API Calls (Groq Whisper + LLM) ──
+# ── Audio Processing ──
+pyannote.audio==3.1.1
+huggingface_hub>=0.25,<1.0
+transformers>=4.38,<5.0
+torch==2.4.0
+torchaudio==2.4.0
+torchvision==0.19.0
+pydub>=0.25.1
+assemblyai>=0.35.0
+
+# ── Transcription + LLM (Groq API) ──
 httpx>=0.25.0
 groq>=0.4.0
+
+# ── Embeddings + Reranking ──
+sentence-transformers>=2.2.0,<4.0
+
+# ── LiveKit ──
+livekit>=0.8.0
+livekit-api>=0.5.0
 
 # ── Evaluation & Visualization ──
 scikit-learn>=1.3.0
 matplotlib>=3.7.0
 plotly>=5.15.0
 
-# ── Audio Processing (chunking large files) ──
-pydub>=0.25.1
+# ── Utilities ──
 ffmpeg-python>=0.2.0
-assemblyai>=0.35.0
