@@ -271,4 +271,24 @@ with tab_analyzer:
     st.markdown(f"<h3 style='color:{config.BRAND_TEXT};'>Automated Interview Analysis</h3>", unsafe_allow_html=True)
     st.caption("Structured 8-section analysis: timeline, symptoms, medications, dynamics, gaps.")
 
-    if st.button("Run Analysis", key="btn_analyzer", type="primary", u
+    if st.button("Run Analysis", key="btn_analyzer", type="primary", use_container_width=True):
+        all_segments = db.get_segments(interview_id)
+        if not all_segments:
+            st.warning("No segments found for this interview.")
+        else:
+            try:
+                from llm.grounded_llm import analyze_interview
+                with st.spinner("Analyzing..."):
+                    output = st.write_stream(analyze_interview(all_segments, stream=True))
+                st.divider()
+                display_segments(all_segments, "Source Segments")
+            except Exception as e:
+                st.error(f"Analysis failed: {e}")
+                # Non-streaming fallback
+                try:
+                    from llm.grounded_llm import analyze_interview
+                    result = analyze_interview(all_segments, stream=False)
+                    st.markdown(result)
+                    display_segments(all_segments, "Source Segments")
+                except Exception as e2:
+                    st.error(f"Fallback also failed: {e2}")
