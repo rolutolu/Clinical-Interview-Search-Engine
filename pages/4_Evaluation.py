@@ -320,8 +320,14 @@ elif st.button("Run Evaluation", type="primary", use_container_width=True):
                 st.dataframe(df, use_container_width=True, hide_index=True)
 
             # Charts
-            st.subheader("Precision@K and Recall@K Charts")
-
+            st.subheader("Metric Charts")
+            
+            # Checkbox to select metrics
+            col_sel1, col_sel2 = st.columns(2)
+            with col_sel1:
+                show_precision = st.checkbox("Show Precision@K Chart", value=True)
+                show_recall = st.checkbox("Show Recall@K Chart", value=True)
+            
             chart_rows = []
             for mode_name, mode_results in results.items():
                 for k, metrics in sorted(mode_results.items()):
@@ -335,17 +341,26 @@ elif st.button("Run Evaluation", type="primary", use_container_width=True):
             if chart_rows:
                 chart_df = pd.DataFrame(chart_rows)
 
-                col_p, col_r = st.columns(2)
-
-                with col_p:
+                if show_precision and show_recall:
+                    col_p, col_r = st.columns(2)
+                    with col_p:
+                        st.markdown("**Precision@K by Retrieval Mode**")
+                        pivot_p = chart_df.pivot(index="K", columns="Mode", values="Precision")
+                        st.line_chart(pivot_p)
+                    with col_r:
+                        st.markdown("**Recall@K by Retrieval Mode**")
+                        pivot_r = chart_df.pivot(index="K", columns="Mode", values="Recall")
+                        st.line_chart(pivot_r)
+                elif show_precision:
                     st.markdown("**Precision@K by Retrieval Mode**")
                     pivot_p = chart_df.pivot(index="K", columns="Mode", values="Precision")
                     st.line_chart(pivot_p)
-
-                with col_r:
+                elif show_recall:
                     st.markdown("**Recall@K by Retrieval Mode**")
                     pivot_r = chart_df.pivot(index="K", columns="Mode", values="Recall")
                     st.line_chart(pivot_r)
+                else:
+                    st.info("Select a metric above to display the corresponding chart.")
 
             # Per-query breakdown
             st.subheader("Per-Query Breakdown")
