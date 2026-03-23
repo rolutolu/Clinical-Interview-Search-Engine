@@ -219,19 +219,23 @@ with col1:
         default=config.K_VALUES,
     )
 with col2:
-    search_method = st.selectbox(
-        "Search Method",
-        ["lexical"],
-        key="eval_method",
-        help="Lexical: Postgres full-text search. Semantic/hybrid available in Colab.",
+    available_methods = getattr(config, "SEARCH_METHODS", ["lexical", "semantic", "hybrid"])
+    search_methods = st.multiselect(
+        "Search Methods to Compare",
+        options=available_methods,
+        default=available_methods,
+        key="eval_methods",
+        help="Select one or more search methods to compare on the charts.",
     )
 
 if st.session_state.eval_labels is None:
     st.info("Generate or upload evaluation labels first (Step 1).")
-elif st.button("Run Evaluation", type="primary", use_container_width=True):
+elif not search_methods:
+    st.warning("Select at least one search method to run evaluation.")
+elif st.button("Run Evaluation", type="primary", width='stretch'):
     eval_labels = st.session_state.eval_labels
 
-    with st.spinner("Running evaluation across all modes and K values..."):
+    with st.spinner("Running evaluation across all methods, modes and K values..."):
         from evaluation.metrics import precision_at_k, recall_at_k
         from retrieval.search import search
 
@@ -242,58 +246,65 @@ elif st.button("Run Evaluation", type="primary", use_container_width=True):
             if mode in by_mode:
                 by_mode[mode].append(label)
 
+        # results[method][mode_display] = {k: {precision, recall, num_queries}}
         results = {}
         mode_display = {"combined": "Overall", "patient": "Patient-Only", "clinician": "Clinician-Only"}
 
-        for mode, labels in by_mode.items():
-            if not labels:
-                continue
-            mode_results = {}
-            for k in k_values:
-                precisions = []
-                recalls = []
-                for label in labels:
-                    query = label["query_text"]
-                    relevant = label["relevant_segment_ids"]
+        for method in search_methods:
+            method_results = {}
+            for mode, labels in by_mode.items():
+                if not labels:
+                    continue
+                mode_results = {}
+                for k in k_values:
+                    precisions = []
+                    recalls = []
+                    for label in labels:
+                        query = label["query_text"]
+                        relevant = label["relevant_segment_ids"]
 
-                    if not relevant:
-                        continue
+                        if not relevant:
+                            continue
 
-                    try:
-                        search_results = search(
-                            query=query,
-                            interview_id=interview_id,
-                            mode=mode,
-                            k=k,
-                            method=search_method,
-                            db=db,
-                        )
+                        try:
+                            search_results = search(
+                                query=query,
+                                interview_id=interview_id,
+                                mode=mode,
+                                k=k,
+                                method=method,
+                                db=db,
+                            )
 
-                        if not search_results:
-                            # Fallback: get segments and use them
-                            speaker_role = None
-                            if mode == "patient":
-                                speaker_role = "PATIENT"
-                            elif mode == "clinician":
-                                speaker_role = "CLINICIAN"
-                            search_results = db.get_segments(interview_id, speaker_role=speaker_role)[:k]
+                            if not search_results:
+                                speaker_role = None
+                                if mode == "patient":
+                                    speaker_role = "PATIENT"
+                                elif mode == "clinician":
+                                    speaker_role = "CLINICIAN"
+                                search_results = db.get_segments(interview_id, speaker_role=speaker_role)[:k]
 
-                        retrieved = [r.get("segment_id", "") for r in search_results]
-                    except Exception:
-                        retrieved = []
+                            retrieved = [r.get("segment_id", "") for r in search_results]
+                        except Exception as e:
+                            if method != "lexical":
+                                st.warning(f"[!] [{method}] error: {e}")
+                            retrieved = []
 
-                    precisions.append(precision_at_k(retrieved, relevant, k))
-                    recalls.append(recall_at_k(retrieved, relevant, k))
+                        precisions.append(precision_at_k(retrieved, relevant, k))
+                        recalls.append(recall_at_k(retrieved, relevant, k))
 
-                if precisions:
-                    mode_results[k] = {
-                        "precision": sum(precisions) / len(precisions),
-                        "recall": sum(recalls) / len(recalls),
-                        "num_queries": len(precisions),
-                    }
+                    if precisions:
+                        mode_results[k] = {
+                            "precision": sum(precisions) / len(precisions),
+                            "recall": sum(recalls) / len(recalls),
+                            "num_queries": len(precisions),
+                        }
 
-            if mode_results:
-                results[mode_display[mode]] = mode_results
+                if mode_results:
+                    method_results[mode_display[mode]] = mode_results
+
+            if method_results:
+                results[method] = method_results
 
         # ══════════════════════════════════════════
         # Display Results
@@ -303,39 +314,49 @@ elif st.button("Run Evaluation", type="primary", use_container_width=True):
         if not results:
             st.warning("No results generated. Make sure evaluation labels have relevant segment IDs.")
         else:
-            # Tables
-            for mode_name, mode_results in results.items():
-                st.markdown(f"### {mode_name} Retrieval")
+            # Tables — one per method, one per mode
+            for method, method_results in results.items():
+                st.markdown(f"### {method.capitalize()} Search")
+                for mode_name, mode_results in method_results.items():
+                    st.markdown(f"**{mode_name} Retrieval**")
+                    rows = []
+                    for k, metrics in sorted(mode_results.items()):
+                        rows.append({
+                            "K": k,
+                            "Precision@K": round(metrics["precision"], 4),
+                            "Recall@K": round(metrics["recall"], 4),
+                            "Num Queries": metrics["num_queries"],
+                        })
+                    df = pd.DataFrame(rows)
+                    st.dataframe(df, width='stretch', hide_index=True)
 
-                rows = []
-                for k, metrics in sorted(mode_results.items()):
-                    rows.append({
-                        "K": k,
-                        "Precision@K": round(metrics["precision"], 4),
-                        "Recall@K": round(metrics["recall"], 4),
-                        "Num Queries": metrics["num_queries"],
-                    })
-
-                df = pd.DataFrame(rows)
-                st.dataframe(df, use_container_width=True, hide_index=True)
-
-            # Charts
+            # Charts — one line per search method
             st.subheader("Metric Charts")
-            
+
             # Checkbox to select metrics
             col_sel1, col_sel2 = st.columns(2)
             with col_sel1:
                 show_precision = st.checkbox("Show Precision@K Chart", value=True)
                 show_recall = st.checkbox("Show Recall@K Chart", value=True)
-            
+
+            # Flatten results into chart rows keyed by (Method, K)
+            # Average across modes for a single per-method line
             chart_rows = []
-            for mode_name, mode_results in results.items():
-                for k, metrics in sorted(mode_results.items()):
+            for method, method_results in results.items():
+                # Aggregate across all modes for this method
+                k_agg = {}
+                for mode_name, mode_results in method_results.items():
+                    for k, metrics in mode_results.items():
+                        if k not in k_agg:
+                            k_agg[k] = {"precision": [], "recall": []}
+                        k_agg[k]["precision"].append(metrics["precision"])
+                        k_agg[k]["recall"].append(metrics["recall"])
+                for k, agg in sorted(k_agg.items()):
                     chart_rows.append({
                         "K": k,
-                        "Precision": metrics["precision"],
-                        "Recall": metrics["recall"],
-                        "Mode": mode_name,
+                        "Precision": sum(agg["precision"]) / len(agg["precision"]),
+                        "Recall": sum(agg["recall"]) / len(agg["recall"]),
+                        "Method": method,
                     })
 
             if chart_rows:
@@ -344,20 +365,20 @@ elif st.button("Run Evaluation", type="primary", use_container_width=True):
                 if show_precision and show_recall:
                     col_p, col_r = st.columns(2)
                     with col_p:
-                        st.markdown("**Precision@K by Retrieval Mode**")
-                        pivot_p = chart_df.pivot(index="K", columns="Mode", values="Precision")
+                        st.markdown("**Precision@K by Search Method**")
+                        pivot_p = chart_df.pivot(index="K", columns="Method", values="Precision")
                         st.line_chart(pivot_p)
                     with col_r:
-                        st.markdown("**Recall@K by Retrieval Mode**")
-                        pivot_r = chart_df.pivot(index="K", columns="Mode", values="Recall")
+                        st.markdown("**Recall@K by Search Method**")
+                        pivot_r = chart_df.pivot(index="K", columns="Method", values="Recall")
                         st.line_chart(pivot_r)
                 elif show_precision:
-                    st.markdown("**Precision@K by Retrieval Mode**")
-                    pivot_p = chart_df.pivot(index="K", columns="Mode", values="Precision")
+                    st.markdown("**Precision@K by Search Method**")
+                    pivot_p = chart_df.pivot(index="K", columns="Method", values="Precision")
                     st.line_chart(pivot_p)
                 elif show_recall:
-                    st.markdown("**Recall@K by Retrieval Mode**")
-                    pivot_r = chart_df.pivot(index="K", columns="Mode", values="Recall")
+                    st.markdown("**Recall@K by Search Method**")
+                    pivot_r = chart_df.pivot(index="K", columns="Method", values="Recall")
                     st.line_chart(pivot_r)
                 else:
                     st.info("Select a metric above to display the corresponding chart.")
