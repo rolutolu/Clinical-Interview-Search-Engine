@@ -302,7 +302,8 @@ elif st.button("Run Evaluation", type="primary", use_container_width=True):
                 for mode_name, mode_results in method_data.items():
                     for k, metrics in sorted(mode_results.items()):
                         chart_rows.append({
-                            "K": str(k),
+                            "K": k,
+                            "K_label": str(k),
                             "Precision": metrics["precision"],
                             "Recall": metrics["recall"],
                             "F1": metrics["f1"],
@@ -313,9 +314,16 @@ elif st.button("Run Evaluation", type="primary", use_container_width=True):
 
             if chart_rows:
                 chart_df = pd.DataFrame(chart_rows)
+                # Sort by K numerically
+                chart_df = chart_df.sort_values("K")
+                # Use K_label for display but keep numeric order
+                chart_df = chart_df.set_index("K_label", drop=False)
 
-                for mode_name in ["Patient-Only", "Clinician-Only"]:
-                    mode_df = chart_df[chart_df["Mode"] == mode_name]
+                # Get all modes that actually have data
+                available_modes = chart_df["Mode"].unique().tolist()
+
+                for mode_name in available_modes:
+                    mode_df = chart_df[chart_df["Mode"] == mode_name].copy()
                     if mode_df.empty:
                         continue
 
@@ -323,21 +331,21 @@ elif st.button("Run Evaluation", type="primary", use_container_width=True):
                     col_p, col_r = st.columns(2)
                     with col_p:
                         st.markdown("**Precision@K**")
-                        pivot = mode_df.pivot_table(index="K", columns="Method", values="Precision", sort=False)
+                        pivot = mode_df.pivot_table(index="K", columns="Method", values="Precision", sort=True)
                         st.line_chart(pivot)
                     with col_r:
                         st.markdown("**Recall@K**")
-                        pivot = mode_df.pivot_table(index="K", columns="Method", values="Recall", sort=False)
+                        pivot = mode_df.pivot_table(index="K", columns="Method", values="Recall", sort=True)
                         st.line_chart(pivot)
 
                     col_f, col_n = st.columns(2)
                     with col_f:
                         st.markdown("**F1@K**")
-                        pivot = mode_df.pivot_table(index="K", columns="Method", values="F1", sort=False)
+                        pivot = mode_df.pivot_table(index="K", columns="Method", values="F1", sort=True)
                         st.line_chart(pivot)
                     with col_n:
                         st.markdown("**nDCG@K**")
-                        pivot = mode_df.pivot_table(index="K", columns="Method", values="nDCG", sort=False)
+                        pivot = mode_df.pivot_table(index="K", columns="Method", values="nDCG", sort=True)
                         st.line_chart(pivot)
 
             # ── Per-Query Drill-Down ──
