@@ -132,10 +132,10 @@ def _hybrid_search(
 ) -> List[dict]:
     """
     Combine lexical + semantic results using Reciprocal Rank Fusion (RRF)
-    with imputed ranks for missing documents.
+    with chronological fallback when lexical returns too few results.
 
-    Segments found by only one method get a penalty rank in the other,
-    ensuring hybrid always differs from either method alone.
+    This ensures hybrid ALWAYS produces different rankings from pure semantic
+    by fusing semantic similarity ranks with a second signal (keyword or temporal).
 
     RRF formula: score(d) = sum(1 / (k_rrf + rank_i(d))) for each system i
     Reference: Cormack et al. 2009
@@ -145,32 +145,40 @@ def _hybrid_search(
     lexical_results = _lexical_search(db, query, n_candidates, interview_id, speaker_role)
     semantic_results = _semantic_search(db, query, n_candidates, interview_id, speaker_role)
 
-    # If one method returns nothing, return the other
-    if not lexical_results and not semantic_results:
+    if not semantic_results and not lexical_results:
         return []
-    if not lexical_results:
-        return semantic_results[:k]
     if not semantic_results:
         return lexical_results[:k]
 
-    k_rrf = 60  # Standard RRF constant
+    # If lexical returned too few results, supplement with chronological ordering
+    # This gives hybrid a second ranking signal that differs from semantic
+    if len(lexical_results) < 2:
+        all_segs = db.get_segments(interview_id, speaker_role=speaker_role)
+        # Use chronological order as a baseline ranking
+        seen = {r["segment_id"] for r in lexical_results}
+        for seg in all_segs:
+            if seg["segment_id"] not in seen:
+                seg["score"] = 0.001
+                seg["method"] = "chronological"
+                lexical_results.append(seg)
 
-    # Build rank lookups
+    k_rrf = 60
+
+    # Build rank lookups from each system
     lex_rank = {r["segment_id"]: i for i, r in enumerate(lexical_results)}
     sem_rank = {r["segment_id"]: i for i, r in enumerate(semantic_results)}
 
-    # Collect all unique segment IDs and their data
+    # Collect all unique segments
     all_segments = {}
     for r in lexical_results:
         all_segments[r["segment_id"]] = r
     for r in semantic_results:
         all_segments[r["segment_id"]] = r
 
-    # Penalty rank for segments not found by a method
-    # (worse than the last actual rank, but not infinite)
-    penalty_rank = n_candidates + 10
+    # Penalty rank for segments still not in one list
+    penalty_rank = max(len(lexical_results), len(semantic_results)) + 10
 
-    # Compute RRF scores with imputed ranks
+    # Compute RRF scores
     rrf_scores = []
     for sid, data in all_segments.items():
         lr = lex_rank.get(sid, penalty_rank)
@@ -183,7 +191,6 @@ def _hybrid_search(
 
     rrf_scores.sort(key=lambda x: x["score"], reverse=True)
     return rrf_scores[:k]
-
 
 def _normalize_scores(results: List[dict]) -> List[dict]:
     """Normalize scores to [0, 1] range using min-max scaling."""
