@@ -131,51 +131,58 @@ def _hybrid_search(
     interview_id: str, speaker_role: Optional[str],
 ) -> List[dict]:
     """
-    Combine lexical + semantic results using Reciprocal Rank Fusion (RRF).
+    Combine lexical + semantic results using Reciprocal Rank Fusion (RRF)
+    with imputed ranks for missing documents.
 
-    RRF (Cormack et al. 2009) is preferred over raw score combination because:
-    - Scores from different systems are not directly comparable
-    - RRF only uses rank positions, making it scale-invariant
-    - Formula: RRF_score(d) = sum( 1 / (k_rrf + rank_i(d)) ) for each system i
+    Segments found by only one method get a penalty rank in the other,
+    ensuring hybrid always differs from either method alone.
 
-    Falls back to weighted score fusion if one method returns no results.
+    RRF formula: score(d) = sum(1 / (k_rrf + rank_i(d))) for each system i
+    Reference: Cormack et al. 2009
     """
     n_candidates = k * 3
 
     lexical_results = _lexical_search(db, query, n_candidates, interview_id, speaker_role)
     semantic_results = _semantic_search(db, query, n_candidates, interview_id, speaker_role)
 
-    # If one method returns nothing, use the other
+    # If one method returns nothing, return the other
+    if not lexical_results and not semantic_results:
+        return []
     if not lexical_results:
         return semantic_results[:k]
     if not semantic_results:
         return lexical_results[:k]
 
-    # Reciprocal Rank Fusion (k_rrf=60 is standard)
-    k_rrf = 60
-    rrf_scores = {}
+    k_rrf = 60  # Standard RRF constant
 
-    for rank, r in enumerate(lexical_results):
-        sid = r["segment_id"]
-        rrf_scores[sid] = {"data": r, "score": 0.0}
-        rrf_scores[sid]["score"] += 1.0 / (k_rrf + rank + 1)
+    # Build rank lookups
+    lex_rank = {r["segment_id"]: i for i, r in enumerate(lexical_results)}
+    sem_rank = {r["segment_id"]: i for i, r in enumerate(semantic_results)}
 
-    for rank, r in enumerate(semantic_results):
-        sid = r["segment_id"]
-        if sid not in rrf_scores:
-            rrf_scores[sid] = {"data": r, "score": 0.0}
-        rrf_scores[sid]["score"] += 1.0 / (k_rrf + rank + 1)
+    # Collect all unique segment IDs and their data
+    all_segments = {}
+    for r in lexical_results:
+        all_segments[r["segment_id"]] = r
+    for r in semantic_results:
+        all_segments[r["segment_id"]] = r
 
-    # Build ranked list
-    ranked = []
-    for sid, entry in rrf_scores.items():
-        result = entry["data"]
-        result["score"] = round(entry["score"], 6)
+    # Penalty rank for segments not found by a method
+    # (worse than the last actual rank, but not infinite)
+    penalty_rank = n_candidates + 10
+
+    # Compute RRF scores with imputed ranks
+    rrf_scores = []
+    for sid, data in all_segments.items():
+        lr = lex_rank.get(sid, penalty_rank)
+        sr = sem_rank.get(sid, penalty_rank)
+        score = (1.0 / (k_rrf + lr + 1)) + (1.0 / (k_rrf + sr + 1))
+        result = {**data}
+        result["score"] = round(score, 6)
         result["method"] = "hybrid"
-        ranked.append(result)
+        rrf_scores.append(result)
 
-    ranked.sort(key=lambda x: x["score"], reverse=True)
-    return ranked[:k]
+    rrf_scores.sort(key=lambda x: x["score"], reverse=True)
+    return rrf_scores[:k]
 
 
 def _normalize_scores(results: List[dict]) -> List[dict]:
