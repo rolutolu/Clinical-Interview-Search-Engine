@@ -60,6 +60,26 @@ interview_id = interview_options[selected_label]
 seg_count = db.get_segment_count(interview_id)
 st.caption(f"Interview **{interview_id}** — {seg_count} segments indexed")
 
+# ── Check for embeddings ──
+_has_embeddings = False
+try:
+    test = db.vector_search([0.0] * config.EMBEDDING_DIM, 1, interview_id)
+    _has_embeddings = bool(test)
+except Exception:
+    pass
+
+if not _has_embeddings and len(config.SEARCH_METHODS) > 1:
+    st.warning("No embeddings for this interview — semantic/hybrid will fall back to lexical.")
+    if st.button("Generate Embeddings Now"):
+        with st.spinner("Generating embeddings..."):
+            try:
+                from retrieval.embeddings import embed_and_store_segments
+                segs = db.get_segments(interview_id)
+                n = embed_and_store_segments(segs, db, progress_callback=st.write)
+                st.success(f"Embeddings stored for {n} segments. Reload the page.")
+            except Exception as e:
+                st.error(f"Failed: {e}")
+
 # ══════════════════════════════════════════
 # Retrieval Controls
 # ══════════════════════════════════════════

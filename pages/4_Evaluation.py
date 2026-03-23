@@ -58,7 +58,27 @@ if not all_segments:
 p_count = sum(1 for s in all_segments if s.get("speaker_role") == "PATIENT")
 c_count = sum(1 for s in all_segments if s.get("speaker_role") == "CLINICIAN")
 st.caption(f"{len(all_segments)} segments — Patient: {p_count} · Clinician: {c_count}")
+# ── Check for embeddings ──
+_has_embeddings = False
+try:
+    test = db.vector_search([0.0] * config.EMBEDDING_DIM, 1, interview_id)
+    _has_embeddings = bool(test)
+except Exception:
+    pass
 
+if not _has_embeddings:
+    st.warning("No embeddings stored for this interview. Semantic and hybrid search will return identical results to lexical.")
+    if st.button("Generate Embeddings Now", type="primary"):
+        with st.spinner("Generating 384-dim MiniLM embeddings for all segments..."):
+            try:
+                from retrieval.embeddings import embed_and_store_segments
+                n = embed_and_store_segments(all_segments, db, progress_callback=st.write)
+                st.success(f"Embeddings generated and stored for {n} segments. Reload the page and re-run evaluation.")
+                _has_embeddings = True
+            except Exception as e:
+                st.error(f"Embedding generation failed: {e}")
+else:
+    st.success("Embeddings detected — semantic and hybrid search are fully active.")
 st.divider()
 
 # ══════════════════════════════════════════
