@@ -113,7 +113,7 @@ def embed_and_store_segments(
     embeddings = generate_embeddings_batch(texts, batch_size=batch_size)
 
     _log("Storing embeddings in Supabase...")
-    pairs = list(zip(ids, embeddings))
+    pairs = [{"segment_id": sid, "embedding": emb} for sid, emb in zip(ids, embeddings)]
 
     # Batch update in groups of 50 to avoid timeout
     stored = 0
