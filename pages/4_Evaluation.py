@@ -64,9 +64,11 @@ st.caption(
 
 tab_auto, tab_manual = st.tabs(["Auto-Generate (LLM-as-Judge)", "Upload Manual Labels"])
 
-# Store labels in session state
+# Store labels and results in session state
 if "eval_labels" not in st.session_state:
     st.session_state.eval_labels = None
+if "eval_results" not in st.session_state:
+    st.session_state.eval_results = None
 
 with tab_auto:
     st.markdown(
@@ -306,14 +308,14 @@ elif st.button("Run Evaluation", type="primary", width='stretch'):
             if method_results:
                 results[method] = method_results
 
-        # ══════════════════════════════════════════
-        # Display Results
-        # ══════════════════════════════════════════
-        st.subheader("Results")
+        # Save results to session state so checkboxes don't wipe them
+        st.session_state.eval_results = results
 
-        if not results:
-            st.warning("No results generated. Make sure evaluation labels have relevant segment IDs.")
-        else:
+# ══════════════════════════════════════════
+# Display Results (outside button block so it persists)
+# ══════════════════════════════════════════
+if st.session_state.get("eval_results"):
+    results = st.session_state.eval_results
             # Tables — one per method, one per mode
             for method, method_results in results.items():
                 st.markdown(f"### {method.capitalize()} Search")

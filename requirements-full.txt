@@ -31,6 +31,7 @@ pyannote.audio==3.1.1
 # ── Numerical Utilities (Critical Versions) ──
 # Specific version needed for compatibility with pyannote/torch hacks
 numpy>=1.24.0,<2.0.0
+protobuf>=3.20,<5.0.0  # Required for Streamlit compatibility (<5.0 to avoid TF loop)
 
 # ── Development Tools ──
 ipython>=8.12.0
