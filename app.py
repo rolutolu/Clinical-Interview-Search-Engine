@@ -180,6 +180,13 @@ st.markdown(f"""
         background: {config.BRAND_CARD};
         border-right: 1px solid #30363D;
     }}
+    section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+    section[data-testid="stSidebar"] span,
+    section[data-testid="stSidebar"] label,
+    section[data-testid="stSidebar"] p,
+    section[data-testid="stSidebar"] small {{
+        color: {config.BRAND_TEXT} !important;
+    }}
 </style>
 """, unsafe_allow_html=True)
 
