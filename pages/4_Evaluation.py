@@ -316,85 +316,85 @@ elif st.button("Run Evaluation", type="primary", width='stretch'):
 # ══════════════════════════════════════════
 if st.session_state.get("eval_results"):
     results = st.session_state.eval_results
-            # Tables — one per method, one per mode
-            for method, method_results in results.items():
-                st.markdown(f"### {method.capitalize()} Search")
-                for mode_name, mode_results in method_results.items():
-                    st.markdown(f"**{mode_name} Retrieval**")
-                    rows = []
-                    for k, metrics in sorted(mode_results.items()):
-                        rows.append({
-                            "K": k,
-                            "Precision@K": round(metrics["precision"], 4),
-                            "Recall@K": round(metrics["recall"], 4),
-                            "Num Queries": metrics["num_queries"],
-                        })
-                    df = pd.DataFrame(rows)
-                    st.dataframe(df, width='stretch', hide_index=True)
+    # Tables — one per method, one per mode
+    for method, method_results in results.items():
+        st.markdown(f"### {method.capitalize()} Search")
+        for mode_name, mode_results in method_results.items():
+            st.markdown(f"**{mode_name} Retrieval**")
+            rows = []
+            for k, metrics in sorted(mode_results.items()):
+                rows.append({
+                    "K": k,
+                    "Precision@K": round(metrics["precision"], 4),
+                    "Recall@K": round(metrics["recall"], 4),
+                    "Num Queries": metrics["num_queries"],
+                })
+            df = pd.DataFrame(rows)
+            st.dataframe(df, width='stretch', hide_index=True)
 
-            # Charts — one line per search method
-            st.subheader("Metric Charts")
+    # Charts — one line per search method
+    st.subheader("Metric Charts")
 
-            # Checkbox to select metrics
-            col_sel1, col_sel2 = st.columns(2)
-            with col_sel1:
-                show_precision = st.checkbox("Show Precision@K Chart", value=True)
-                show_recall = st.checkbox("Show Recall@K Chart", value=True)
+    # Checkbox to select metrics
+    col_sel1, col_sel2 = st.columns(2)
+    with col_sel1:
+        show_precision = st.checkbox("Show Precision@K Chart", value=True)
+        show_recall = st.checkbox("Show Recall@K Chart", value=True)
 
-            # Flatten results into chart rows keyed by (Method, K)
-            # Average across modes for a single per-method line
-            chart_rows = []
-            for method, method_results in results.items():
-                # Aggregate across all modes for this method
-                k_agg = {}
-                for mode_name, mode_results in method_results.items():
-                    for k, metrics in mode_results.items():
-                        if k not in k_agg:
-                            k_agg[k] = {"precision": [], "recall": []}
-                        k_agg[k]["precision"].append(metrics["precision"])
-                        k_agg[k]["recall"].append(metrics["recall"])
-                for k, agg in sorted(k_agg.items()):
-                    chart_rows.append({
-                        "K": k,
-                        "Precision": sum(agg["precision"]) / len(agg["precision"]),
-                        "Recall": sum(agg["recall"]) / len(agg["recall"]),
-                        "Method": method,
-                    })
+    # Flatten results into chart rows keyed by (Method, K)
+    # Average across modes for a single per-method line
+    chart_rows = []
+    for method, method_results in results.items():
+        # Aggregate across all modes for this method
+        k_agg = {}
+        for mode_name, mode_results in method_results.items():
+            for k, metrics in mode_results.items():
+                if k not in k_agg:
+                    k_agg[k] = {"precision": [], "recall": []}
+                k_agg[k]["precision"].append(metrics["precision"])
+                k_agg[k]["recall"].append(metrics["recall"])
+        for k, agg in sorted(k_agg.items()):
+            chart_rows.append({
+                "K": k,
+                "Precision": sum(agg["precision"]) / len(agg["precision"]),
+                "Recall": sum(agg["recall"]) / len(agg["recall"]),
+                "Method": method,
+            })
 
-            if chart_rows:
-                chart_df = pd.DataFrame(chart_rows)
+    if chart_rows:
+        chart_df = pd.DataFrame(chart_rows)
 
-                if show_precision and show_recall:
-                    col_p, col_r = st.columns(2)
-                    with col_p:
-                        st.markdown("**Precision@K by Search Method**")
-                        pivot_p = chart_df.pivot(index="K", columns="Method", values="Precision")
-                        st.line_chart(pivot_p)
-                    with col_r:
-                        st.markdown("**Recall@K by Search Method**")
-                        pivot_r = chart_df.pivot(index="K", columns="Method", values="Recall")
-                        st.line_chart(pivot_r)
-                elif show_precision:
-                    st.markdown("**Precision@K by Search Method**")
-                    pivot_p = chart_df.pivot(index="K", columns="Method", values="Precision")
-                    st.line_chart(pivot_p)
-                elif show_recall:
-                    st.markdown("**Recall@K by Search Method**")
-                    pivot_r = chart_df.pivot(index="K", columns="Method", values="Recall")
-                    st.line_chart(pivot_r)
-                else:
-                    st.info("Select a metric above to display the corresponding chart.")
+        if show_precision and show_recall:
+            col_p, col_r = st.columns(2)
+            with col_p:
+                st.markdown("**Precision@K by Search Method**")
+                pivot_p = chart_df.pivot(index="K", columns="Method", values="Precision")
+                st.line_chart(pivot_p)
+            with col_r:
+                st.markdown("**Recall@K by Search Method**")
+                pivot_r = chart_df.pivot(index="K", columns="Method", values="Recall")
+                st.line_chart(pivot_r)
+        elif show_precision:
+            st.markdown("**Precision@K by Search Method**")
+            pivot_p = chart_df.pivot(index="K", columns="Method", values="Precision")
+            st.line_chart(pivot_p)
+        elif show_recall:
+            st.markdown("**Recall@K by Search Method**")
+            pivot_r = chart_df.pivot(index="K", columns="Method", values="Recall")
+            st.line_chart(pivot_r)
+        else:
+            st.info("Select a metric above to display the corresponding chart.")
 
-            # Per-query breakdown
-            st.subheader("Per-Query Breakdown")
-            with st.expander("Show per-query results"):
-                for label in eval_labels:
-                    n_relevant = len(label.get("relevant_segment_ids", []))
-                    if n_relevant > 0:
-                        st.write(
-                            f"**{label['query_id']}** [{label['retrieval_mode']}]: "
-                            f"\"{label['query_text']}\" — {n_relevant} relevant segments"
-                        )
+    # Per-query breakdown
+    st.subheader("Per-Query Breakdown")
+    with st.expander("Show per-query results"):
+        for label in st.session_state.eval_labels:
+            n_relevant = len(label.get("relevant_segment_ids", []))
+            if n_relevant > 0:
+                st.write(
+                    f"**{label['query_id']}** [{label['retrieval_mode']}]: "
+                    f"\"{label['query_text']}\" — {n_relevant} relevant segments"
+                )
 
 # ══════════════════════════════════════════
 # Step 3: Save Labels to Database
