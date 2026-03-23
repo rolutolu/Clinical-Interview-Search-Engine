@@ -194,26 +194,10 @@ col1, col2, col3 = st.columns(3)
 with col1:
     k_values = st.multiselect("K Values", options=[1, 2, 3, 5, 10, 15, 20], default=config.K_VALUES)
 with col2:
-    # Check if embeddings exist for this interview
-    _has_embeddings_for_interview = False
-    try:
-        from retrieval.embeddings import generate_embedding
-        # Quick check: try vector search with a dummy query
-        test_results = db.vector_search([0.0] * config.EMBEDDING_DIM, 1, interview_id)
-        _has_embeddings_for_interview = bool(test_results)
-    except Exception:
-        pass
-
-    available_methods = ["lexical"]
-    if _has_embeddings_for_interview:
-        available_methods = config.SEARCH_METHODS
-    else:
-        st.caption("Semantic/hybrid disabled — no embeddings stored for this interview.")
-
     eval_methods = st.multiselect(
         "Search Methods to Compare",
-        options=available_methods,
-        default=available_methods,
+        options=config.SEARCH_METHODS,
+        default=config.SEARCH_METHODS,
     )
 with col3:
     use_rerank = st.checkbox("Apply Reranking", value=config.RERANKER_ENABLED, disabled=not config.RERANKER_ENABLED)
@@ -341,21 +325,21 @@ elif st.button("Run Evaluation", type="primary", use_container_width=True):
                     with col_p:
                         st.markdown("**Precision@K**")
                         pivot = method_df.pivot_table(index="K", columns="Mode", values="Precision", sort=False)
-                        st.bar_chart(pivot)
+                        st.line_chart(pivot)
                     with col_r:
                         st.markdown("**Recall@K**")
                         pivot = method_df.pivot_table(index="K", columns="Mode", values="Recall", sort=False)
-                        st.bar_chart(pivot)
+                        st.line_chart(pivot)
 
                     col_f, col_n = st.columns(2)
                     with col_f:
                         st.markdown("**F1@K**")
                         pivot = method_df.pivot_table(index="K", columns="Mode", values="F1", sort=False)
-                        st.bar_chart(pivot)
+                        st.line_chart(pivot)
                     with col_n:
                         st.markdown("**nDCG@K**")
                         pivot = method_df.pivot_table(index="K", columns="Mode", values="nDCG", sort=False)
-                        st.bar_chart(pivot)
+                        st.line_chart(pivot)
 
             # ── Per-Query Drill-Down ──
             st.markdown(f"<h3 style='color:{config.BRAND_TEXT};'>Per-Query Breakdown</h3>", unsafe_allow_html=True)
