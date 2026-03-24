@@ -65,6 +65,7 @@ IS_LOCAL = ENV["is_local"]
 # API Keys
 # ═══════════════════════════════════════════
 GROQ_API_KEY = _get_secret("GROQ_API_KEY")
+GEMINI_API_KEY = _get_secret("GEMINI_API_KEY", "")
 HF_TOKEN = _get_secret("HF_TOKEN")
 SUPABASE_URL = _get_secret("SUPABASE_URL")
 SUPABASE_KEY = _get_secret("SUPABASE_KEY")
