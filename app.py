@@ -7,6 +7,13 @@ Supports offline (Pyannote/AssemblyAI) and live (LiveKit) pipelines.
 Run with: python -m streamlit run app.py
 """
 
+try:
+    import torchaudio
+    if not hasattr(torchaudio, "set_audio_backend"):
+        torchaudio.set_audio_backend = lambda x: None
+except ImportError:
+    pass
+
 import streamlit as st
 import config
 
