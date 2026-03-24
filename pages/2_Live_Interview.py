@@ -352,40 +352,17 @@ with st.expander("Step 2: Conduct a Live Interview"):
 # ══════════════════════════════════════════
 # Comparison Table
 # ══════════════════════════════════════════
-st.divider()
-st.markdown(f"<small style='color:{config.BRAND_MUTED};font-weight:600;letter-spacing:1px;'>PIPELINE COMPARISON</small>", unsafe_allow_html=True)
+st.markdown(f"<h3 style='color:{config.BRAND_TEXT};'>Offline vs Live Pipeline Comparison</h3>", unsafe_allow_html=True)
 
-comparison_data = {
-    "Feature": [
-        "Speaker Separation",
-        "Diarization Error Rate",
-        "Transcription",
-        "Max Speakers",
-        "Real-time",
-        "GPU Required",
-        "Audio Source",
-    ],
-    "Offline (Pyannote + AssemblyAI)": [
-        "Acoustic diarization",
-        "~5-15%",
-        "AssemblyAI / Groq Whisper",
-        "10+",
-        "No (batch)",
-        "Optional (Pyannote)",
-        "Uploaded file",
-    ],
-    "Live (LiveKit)": [
-        "Track separation (WebRTC)",
-        "0% (perfect)",
-        "Groq Whisper per-track",
-        "Room capacity",
-        "Yes (streaming)",
-        "No",
-        "Live microphone",
-    ],
-}
-
-st.dataframe(
-    pd.DataFrame(comparison_data).set_index("Feature"),
-    use_container_width=True,
-)
+table_md = """
+| Feature | Offline (Pyannote + AssemblyAI) | Live (LiveKit) |
+|---|---|---|
+| **Speaker Separation** | Acoustic diarization | Track separation (WebRTC) |
+| **Diarization Error Rate** | ~5-15% | 0% (perfect) |
+| **Transcription** | AssemblyAI / Groq Whisper | Groq Whisper per-track |
+| **Max Speakers** | 10+ | Room capacity |
+| **Real-time** | No (batch) | Yes (streaming) |
+| **GPU Required** | Optional (Pyannote) | No |
+| **Audio Source** | Uploaded file | Live microphone |
+"""
+st.markdown(table_md)
