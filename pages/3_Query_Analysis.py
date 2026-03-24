@@ -58,8 +58,9 @@ with col_ctrl2:
 with col_ctrl3:
     search_method = st.selectbox(
         "Search Method",
-        ["lexical"],
-        help="Lexical: keyword matching via Postgres full-text search. Semantic/hybrid available in Colab with sentence-transformers.",
+        config.SEARCH_METHODS,
+        index=0 if config.DEFAULT_SEARCH_METHOD not in config.SEARCH_METHODS else config.SEARCH_METHODS.index(config.DEFAULT_SEARCH_METHOD),
+        help="Lexical: keyword matching. Semantic/Hybrid require the local embeddings module to be active.",
     )
 
 st.divider()

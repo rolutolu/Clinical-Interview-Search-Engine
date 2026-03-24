@@ -79,6 +79,7 @@ IS_LOCAL = ENV["is_local"]
 # API Keys
 # ═══════════════════════════════════════════
 GROQ_API_KEY = _get_secret("GROQ_API_KEY")
+GEMINI_API_KEY = _get_secret("GEMINI_API_KEY", "")
 HF_TOKEN = _get_secret("HF_TOKEN")
 SUPABASE_URL = _get_secret("SUPABASE_URL")
 SUPABASE_KEY = _get_secret("SUPABASE_KEY")
@@ -95,6 +96,7 @@ EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"  # 384-dim vectors
 EMBEDDING_DIM = 384
 DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
 LLM_MODEL = "llama-3.3-70b-versatile"                      # Groq LLM for analysis
+LLM_MODEL_FALLBACK = "llama-3.1-8b-instant"               # Groq LLM fallback constraint
 RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"    # Cross-encoder for precision
 
 # ═══════════════════════════════════════════

@@ -1,12 +1,17 @@
 """
 Page 1: Upload & Offline Pipeline
 
-Uses AssemblyAI for acoustic speaker diarization (who spoke when based on voice)
-then Groq LLM for semantic role labeling (which speaker is PATIENT vs CLINICIAN).
+Full local version with:
+    - Voice input for patient profile (Groq Whisper → text)
+    - Dual diarization: Pyannote (primary, GPU) + AssemblyAI (fallback, API)
+    - Groq Whisper transcription with auto-chunking for large files
+    - Temporal alignment with confidence scoring
+    - LLM-based speaker role + name identification
+    - Auto-embedding generation (sentence-transformers)
+    - Temporal speaker timeline visualization
+    - Professional dark medical UI
 
-This hybrid approach combines:
-- Acoustic accuracy: voice embeddings reliably separate distinct speakers
-- Semantic intelligence: LLM identifies clinical roles from conversation content
+Gracefully degrades on cloud (no torch): AssemblyAI + LLM labeling only.
 """
 
 import streamlit as st
@@ -15,28 +20,27 @@ import tempfile
 import os
 import uuid
 import json
-import math
 
-st.set_page_config(page_title="Upload Interview", page_icon="UP", layout="wide")
-st.title("Upload & Process Clinical Interview")
+st.set_page_config(page_title="Upload Interview", page_icon="📤", layout="wide")
+
+# ── Page header ──
 st.markdown(
-    f'<div style="background:linear-gradient(135deg,#fff3cd,#ffeeba);'
-    f'border:1px solid #ffc107;border-radius:8px;padding:0.8rem;'
-    f'color:#856404;font-size:0.9rem;">{config.ETHICS_DISCLAIMER}</div>',
+    f'<p style="font-size:1.8rem;font-weight:700;'
+    f'background:linear-gradient(135deg,{config.BRAND_PRIMARY},{config.BRAND_SECONDARY});'
+    f'-webkit-background-clip:text;-webkit-text-fill-color:transparent;">'
+    f'Upload & Process Interview</p>',
     unsafe_allow_html=True,
 )
+st.markdown(f'<div class="ethics-banner" style="background:linear-gradient(135deg,rgba(255,193,7,0.1),rgba(255,152,0,0.1));border:1px solid rgba(255,193,7,0.3);border-radius:10px;padding:0.8rem 1.2rem;color:#FFC107;font-size:0.88rem;">{config.ETHICS_DISCLAIMER}</div>', unsafe_allow_html=True)
 
-# Check AssemblyAI config
-if not config.ASSEMBLYAI_API_KEY:
-    st.warning(
-        "AssemblyAI API key not set. Add `ASSEMBLYAI_API_KEY` to your Streamlit secrets. "
-        "Get a free key at https://www.assemblyai.com (100 hours free)."
-    )
+# ── Environment badge ──
+methods = ", ".join(config.SEARCH_METHODS).title()
+st.caption(f"Search Engines: **{methods}** · Vector Embeddings: **{'Active' if config.ENV.get('has_embeddings') else 'Off'}**")
 
 # ══════════════════════════════════════════
 # Session State
 # ══════════════════════════════════════════
-for key in ["interview_id", "aligned_segments", "speakers_detected"]:
+for key in ["interview_id", "aligned_segments", "speakers_detected", "diar_result"]:
     if key not in st.session_state:
         st.session_state[key] = None if key != "speakers_detected" else []
 if "processing_complete" not in st.session_state:
@@ -44,75 +48,31 @@ if "processing_complete" not in st.session_state:
 
 
 # ══════════════════════════════════════════
-# Core: AssemblyAI transcription + diarization
-# ══════════════════════════════════════════
-def transcribe_with_diarization(audio_path):
-    """
-    Use AssemblyAI to transcribe audio WITH acoustic speaker diarization.
-    Returns list of utterances with speaker labels and timestamps.
-    No GPU needed — this is a cloud API call.
-    """
-    import assemblyai as aai
-
-    aai.settings.api_key = config.ASSEMBLYAI_API_KEY
-
-    aai_config = aai.TranscriptionConfig(
-        speaker_labels=True,
-        speech_models=["universal-3-pro", "universal-2"],
-        language_detection=True,
-    )
-    
-    transcriber = aai.Transcriber()
-    transcript = transcriber.transcribe(audio_path, config=aai_config)
-
-    if transcript.status == aai.TranscriptStatus.error:
-        raise Exception(f"AssemblyAI error: {transcript.error}")
-
-    utterances = []
-    for utt in transcript.utterances:
-        utterances.append({
-            "start_ms": utt.start,
-            "end_ms": utt.end,
-            "text": utt.text.strip(),
-            "speaker": utt.speaker,  # "A", "B", "C", etc.
-        })
-
-    return utterances
-
-
-# ══════════════════════════════════════════
-# Core: LLM role labeling on acoustically-separated speakers
+# LLM role labeling (reused from cloud version)
 # ══════════════════════════════════════════
 def label_roles_with_llm(utterances):
     """
-    Takes acoustically-separated utterances (Speaker A, B, C from AssemblyAI)
-    and uses Groq LLM to identify roles (PATIENT/CLINICIAN) and names.
-
-    This is MUCH more accurate than pure-LLM diarization because the acoustic
-    model already correctly separated the voices — the LLM only needs to
-    figure out which voice is the doctor vs the patient.
+    Takes acoustically-separated utterances (Speaker A/B/C or SPEAKER_00/01)
+    and uses Groq LLM to identify roles and names.
     """
     import httpx
 
-    # Build a summary of what each speaker said
     speaker_samples = {}
     for utt in utterances:
         spk = utt["speaker"]
         if spk not in speaker_samples:
             speaker_samples[spk] = []
         if len(speaker_samples[spk]) < 8:
-            speaker_samples[spk].append(utt["text"])
+            speaker_samples[spk].append(utt.get("text", ""))
 
-    # Build speaker summaries
-    speaker_summary_lines = []
+    lines = []
     for spk in sorted(speaker_samples.keys()):
         samples = speaker_samples[spk]
         count = sum(1 for u in utterances if u["speaker"] == spk)
-        sample_text = " | ".join(samples)
-        speaker_summary_lines.append(f"Speaker {spk} ({count} utterances): {sample_text}")
-    speaker_summary = "\n".join(speaker_summary_lines)
+        lines.append(f"Speaker {spk} ({count} utterances): {' | '.join(samples)}")
+    speaker_summary = "\n".join(lines)
 
-    prompt = f"""You are analyzing a clinical/therapy transcript where speakers have been acoustically separated by voice analysis. Each speaker label (A, B, C, etc.) represents a DISTINCT voice — the acoustic model has already determined who is who based on their voice.
+    prompt = f"""You are analyzing a clinical/therapy transcript where speakers have been acoustically separated. Each speaker label represents a DISTINCT voice.
 
 Your task: For each acoustic speaker, determine their ROLE and NAME.
 
@@ -120,16 +80,16 @@ SPEAKERS DETECTED (with sample utterances):
 {speaker_summary}
 
 RULES:
-1. Each acoustic speaker (A, B, C) is a DISTINCT person — trust the voice separation
-2. CLINICIAN: asks therapeutic/diagnostic questions, gives professional guidance, directs the conversation
-3. PATIENT: describes personal experiences, expresses emotions, answers questions about themselves
-4. A spouse pushing their partner to engage in therapy is a PATIENT, not a clinician
-5. If a name is mentioned or clearly implied, include it. "Dr. Dan", "Bob", etc.
-6. NAME ALIASING: If the same acoustic speaker is called different names, they are the same person (e.g., "Bob" and "Dr. Dan" for Speaker A means their full name is Dr. Bob Dan)
+1. Each speaker is a DISTINCT person — trust the voice separation
+2. CLINICIAN: asks therapeutic/diagnostic questions, gives professional guidance
+3. PATIENT: describes personal experiences, expresses emotions, answers questions
+4. A spouse pressing their partner to engage in therapy is a PATIENT, not a clinician
+5. If a name is mentioned or implied, include it
+6. NAME ALIASING: same speaker called different names = same person
 7. If you cannot determine a name, use "Unknown"
 
-Respond with ONLY a JSON array, one object per acoustic speaker:
-[{{"speaker": "A", "role": "CLINICIAN", "name": "Dr. Dan", "reasoning": "Asks therapeutic questions, directs sessions"}}, {{"speaker": "B", "role": "PATIENT", "name": "Calvin", "reasoning": "Expresses reluctance, describes personal experiences"}}]
+Respond with ONLY a JSON array:
+[{{"speaker": "A", "role": "CLINICIAN", "name": "Dr. Dan", "reasoning": "Asks therapeutic questions"}}]
 
 No other text. Just the JSON array."""
 
@@ -149,7 +109,6 @@ No other text. Just the JSON array."""
     )
     response.raise_for_status()
     content = response.json()["choices"][0]["message"]["content"].strip()
-
     if content.startswith("```"):
         content = content.split("\n", 1)[1]
         if content.endswith("```"):
@@ -158,56 +117,87 @@ No other text. Just the JSON array."""
 
     cast = json.loads(content)
 
-    # Build lookup: acoustic speaker → display label + role
     speaker_map = {}
     for entry in cast:
         spk = entry["speaker"]
         role = entry["role"].upper()
         name = entry.get("name", "Unknown")
-        if "CLINICIAN" in role or "THERAPIST" in role or "DOCTOR" in role:
-            role_base = "CLINICIAN"
-        else:
-            role_base = "PATIENT"
-
-        # Count how many of this role we've seen
+        role_base = "CLINICIAN" if any(r in role for r in ["CLINICIAN", "THERAPIST", "DOCTOR"]) else "PATIENT"
         role_count = sum(1 for v in speaker_map.values() if v["role_base"] == role_base) + 1
         role_numbered = f"{role_base}_{role_count}"
-
-        if name and name != "Unknown":
-            display = f"{name} ({role_numbered})"
-        else:
-            display = role_numbered
-
-        speaker_map[spk] = {
-            "display": display,
-            "role_base": role_base,
-        }
+        display = f"{name} ({role_numbered})" if name and name != "Unknown" else role_numbered
+        speaker_map[spk] = {"display": display, "role_base": role_base, "reasoning": entry.get("reasoning", "")}
 
     return speaker_map
 
 
 # ══════════════════════════════════════════
-# Step 1: Patient Profile
+# Step 1: Patient Profile (text + voice)
 # ══════════════════════════════════════════
-st.subheader("Step 1: Patient Profile (Optional)")
-with st.expander("Enter Patient Profile", expanded=False):
-    col1, col2 = st.columns(2)
-    with col1:
-        patient_name = st.text_input("Patient Name", placeholder="Jane Doe")
-        patient_age = st.number_input("Age", min_value=0, max_value=120, value=0, step=1)
-    with col2:
-        chief_complaint = st.text_input("Chief Complaint", placeholder="Persistent headaches")
-        input_method = st.selectbox("Input Method", ["text", "voice"])
-    medical_history = st.text_area("Medical History", placeholder="Relevant history...", height=100)
+st.markdown(f"<h3 style='color:{config.BRAND_TEXT};'>Step 1: Patient Profile</h3>", unsafe_allow_html=True)
+st.caption("Provide context before processing. Supports text entry or voice input via Whisper.")
+
+with st.expander("Enter Patient Profile (Optional)", expanded=False):
+    profile_tab_text, profile_tab_voice = st.tabs(["Text Input", "Voice Input"])
+
+    with profile_tab_text:
+        col1, col2 = st.columns(2)
+        with col1:
+            patient_name = st.text_input("Patient Name", placeholder="Jane Doe")
+            patient_age = st.number_input("Age", min_value=0, max_value=120, value=0, step=1)
+        with col2:
+            chief_complaint = st.text_input("Chief Complaint", placeholder="Persistent headaches")
+        medical_history = st.text_area("Medical History", placeholder="Relevant history...", height=100)
+        input_method = "text"
+
+    with profile_tab_voice:
+        st.markdown(
+            "Record a voice note describing the patient's profile. "
+            "It will be transcribed via **Groq Whisper** and used as the medical history."
+        )
+        voice_file = st.file_uploader(
+            "Upload voice recording for patient profile",
+            type=["wav", "mp3", "ogg", "flac", "m4a"],
+            key="voice_profile",
+        )
+
+        if voice_file:
+            st.audio(voice_file)
+            if st.button("Transcribe Voice Profile", key="btn_voice"):
+                with st.spinner("Transcribing voice profile..."):
+                    try:
+                        from audio.transcribe import WhisperTranscriber
+                        with tempfile.NamedTemporaryFile(
+                            delete=False, suffix=os.path.splitext(voice_file.name)[1]
+                        ) as vtmp:
+                            vtmp.write(voice_file.getbuffer())
+                            vtmp_path = vtmp.name
+                        transcriber = WhisperTranscriber()
+                        voice_text = transcriber.transcribe_to_text(vtmp_path)
+                        os.unlink(vtmp_path)
+                        st.success("Voice profile transcribed!")
+                        st.text_area("Transcribed Profile (edit if needed)", value=voice_text, key="voice_result", height=120)
+                        # Store in session state for later use
+                        st.session_state["voice_profile_text"] = voice_text
+                    except Exception as e:
+                        st.error(f"Voice transcription failed: {e}")
+
+        # If voice was transcribed, use it
+        if "voice_profile_text" in st.session_state:
+            patient_name = patient_name or ""
+            chief_complaint = chief_complaint or ""
+            medical_history = st.session_state.get("voice_profile_text", "")
+            input_method = "voice"
 
 # ══════════════════════════════════════════
 # Step 2: Upload Audio
 # ══════════════════════════════════════════
-st.subheader("Step 2: Upload Interview Audio")
+st.markdown(f"<h3 style='color:{config.BRAND_TEXT};'>Step 2: Upload Interview Audio</h3>", unsafe_allow_html=True)
+
 uploaded_file = st.file_uploader(
     "Upload clinical interview recording",
     type=["wav", "mp3", "ogg", "flac", "m4a"],
-    help=f"Max {config.MAX_AUDIO_SIZE_MB} MB. AssemblyAI handles files of any size.",
+    help=f"Max {config.MAX_AUDIO_SIZE_MB} MB.",
 )
 
 if uploaded_file:
@@ -217,10 +207,18 @@ if uploaded_file:
     if file_size_mb > config.MAX_AUDIO_SIZE_MB:
         st.error(f"File exceeds {config.MAX_AUDIO_SIZE_MB} MB limit.")
 
+    diarize_engine = st.selectbox(
+        "Diarization Engine",
+        ["AssemblyAI (Cloud, Fast)", "Pyannote (Local, Private)"],
+        index=0 if not config.ENV.get("has_pyannote") else 1
+    )
+    if "Pyannote" in diarize_engine and not config.ENV.get("has_pyannote"):
+        st.warning("Pyannote is not correctly installed in this environment. We will fall back to AssemblyAI.")
+
 # ══════════════════════════════════════════
 # Step 3: Process
 # ══════════════════════════════════════════
-st.subheader("Step 3: Process Interview")
+st.markdown(f"<h3 style='color:{config.BRAND_TEXT};'>Step 3: Process Interview</h3>", unsafe_allow_html=True)
 
 if uploaded_file and st.button("Run Offline Pipeline", type="primary", use_container_width=True):
     file_size_mb = uploaded_file.size / (1024 * 1024)
@@ -242,7 +240,8 @@ if uploaded_file and st.button("Run Offline Pipeline", type="primary", use_conta
         interview_id = str(uuid.uuid4())[:8]
 
         with st.status("Processing interview...", expanded=True) as status:
-            # ── Create interview record ──
+
+            # ── 1. Create interview record ──
             st.write("Creating interview record...")
             interview = Interview(
                 interview_id=interview_id,
@@ -253,69 +252,138 @@ if uploaded_file and st.button("Run Offline Pipeline", type="primary", use_conta
             db.create_interview(interview)
             st.session_state.interview_id = interview_id
 
-            if patient_name or chief_complaint:
+            # Save patient profile
+            prof_name = patient_name if "patient_name" in dir() else ""
+            prof_complaint = chief_complaint if "chief_complaint" in dir() else ""
+            prof_history = medical_history if "medical_history" in dir() else ""
+            prof_method = input_method if "input_method" in dir() else "text"
+
+            if prof_name or prof_complaint or prof_history:
                 profile = PatientProfile(
                     interview_id=interview_id,
-                    name=patient_name,
-                    age=patient_age if patient_age > 0 else None,
-                    chief_complaint=chief_complaint,
-                    medical_history=medical_history,
-                    input_method=input_method,
+                    name=prof_name,
+                    age=patient_age if "patient_age" in dir() and patient_age > 0 else None,
+                    chief_complaint=prof_complaint,
+                    medical_history=prof_history,
+                    input_method=prof_method,
                 )
                 db.create_profile(profile)
-                st.write("Patient profile saved.")
+                st.write(f"Patient profile saved (input: {prof_method}).")
 
-            # ── Step A: AssemblyAI transcription + acoustic diarization ──
-            st.write("Transcribing and diarizing with AssemblyAI (acoustic speaker separation)...")
-            try:
-                utterances = transcribe_with_diarization(tmp_path)
-                unique_speakers = sorted(set(u["speaker"] for u in utterances))
-                st.write(
-                    f"Transcription complete — {len(utterances)} utterances, "
-                    f"{len(unique_speakers)} speakers detected acoustically."
-                )
-            except Exception as e:
-                st.error(f"AssemblyAI failed: {e}")
-                status.update(label="Pipeline failed at transcription", state="error")
-                st.stop()
+            # ── 2. Diarization ──
+            use_pyannote = "Pyannote" in diarize_engine and config.ENV.get("has_pyannote", False)
 
-            # ── Step B: LLM role labeling ──
-            st.write("Identifying speaker roles and names with LLM analysis...")
+            if use_pyannote:
+                st.write(f"Running **Pyannote** speaker diarization (GPU: {config.ENV['has_gpu']})...")
+                try:
+                    from audio.diarize import SpeakerDiarizer
+                    diarizer = SpeakerDiarizer(backend="pyannote")
+                    diar_result = diarizer.diarize(tmp_path)
+                    diar_segments = diar_result["segments"]
+                    st.write(
+                        f"Pyannote diarization complete — {diar_result['num_speakers']} speakers, "
+                        f"{len(diar_segments)} segments in {diar_result['elapsed_sec']}s."
+                    )
+
+                    # ── 3. Transcription (Groq Whisper) ──
+                    st.write("Transcribing audio via Groq Whisper API...")
+                    from audio.transcribe import WhisperTranscriber
+                    transcriber = WhisperTranscriber()
+                    trans_segments = transcriber.transcribe(tmp_path, progress_callback=st.write)
+
+                    # ── 4. Temporal Alignment ──
+                    st.write("Aligning transcript with speaker labels...")
+                    from audio.align import align_segments
+                    aligned, align_metrics = align_segments(
+                        diar_segments, trans_segments, interview_id, source_mode="offline"
+                    )
+                    st.write(
+                        f"Alignment: {align_metrics['total_segments']} segments, "
+                        f"avg confidence: {align_metrics['avg_confidence']:.2f}, "
+                        f"{align_metrics['low_confidence_count']} low-confidence."
+                    )
+
+                    # Build utterances for LLM role labeling
+                    utterances = [
+                        {"speaker": seg.speaker_raw, "text": seg.text, "start_ms": seg.start_ms, "end_ms": seg.end_ms}
+                        for seg in aligned
+                    ]
+                    diar_backend = "pyannote"
+
+                except Exception as e:
+                    st.warning(f"Pyannote failed: {e}. Falling back to AssemblyAI...")
+                    use_pyannote = False
+
+            if not use_pyannote:
+                # AssemblyAI path (cloud fallback or primary on cloud)
+                st.write("Transcribing and diarizing with **AssemblyAI** (acoustic speaker separation)...")
+                try:
+                    from audio.diarize import SpeakerDiarizer
+                    diarizer = SpeakerDiarizer(backend="assemblyai")
+                    diar_result = diarizer.diarize(tmp_path)
+                    # AssemblyAI returns segments with text included
+                    utterances = [
+                        {"speaker": s["speaker"], "text": s.get("text", ""), "start_ms": s["start_ms"], "end_ms": s["end_ms"]}
+                        for s in diar_result["segments"]
+                    ]
+                    st.write(
+                        f"AssemblyAI complete — {diar_result['num_speakers']} speakers, "
+                        f"{len(utterances)} utterances in {diar_result['elapsed_sec']}s."
+                    )
+                    aligned = None  # No separate alignment needed
+                    diar_backend = "assemblyai"
+                except Exception as e:
+                    st.error(f"Diarization failed on both backends: {e}")
+                    status.update(label="Pipeline failed at diarization", state="error")
+                    st.stop()
+
+            # ── 5. LLM Role Labeling ──
+            st.write("Identifying speaker roles and names with **Groq LLM**...")
             try:
                 speaker_map = label_roles_with_llm(utterances)
                 for spk, info in speaker_map.items():
-                    st.write(f"  Speaker {spk} → **{info['display']}**")
+                    st.write(f"  Speaker {spk} → **{info['display']}** — _{info.get('reasoning', '')}_")
             except Exception as e:
-                st.warning(f"LLM labeling failed: {e}. Using acoustic labels only.")
+                st.warning(f"LLM labeling failed: {e}. Using generic labels.")
+                unique_spk = sorted(set(u["speaker"] for u in utterances))
                 speaker_map = {}
-                for i, spk in enumerate(unique_speakers):
-                    speaker_map[spk] = {
-                        "display": f"SPEAKER_{spk}",
-                        "role_base": "PATIENT" if i > 0 else "CLINICIAN",
-                    }
+                for i, spk in enumerate(unique_spk):
+                    role = "CLINICIAN" if i == 0 else "PATIENT"
+                    speaker_map[spk] = {"display": f"{role}_{i+1}", "role_base": role}
 
-            # ── Step C: Build and save segments ──
+            # ── 6. Build and Save Segments ──
             st.write("Saving segments to database...")
-            segments_to_insert = []
-            for utt in utterances:
-                spk = utt["speaker"]
-                info = speaker_map.get(spk, {"display": f"SPEAKER_{spk}", "role_base": "PATIENT"})
-                segments_to_insert.append(Segment(
-                    interview_id=interview_id,
-                    segment_id=str(uuid.uuid4())[:8],
-                    start_ms=utt["start_ms"],
-                    end_ms=utt["end_ms"],
-                    speaker_raw=info["display"],
-                    speaker_role=info["role_base"],
-                    text=utt["text"],
-                    source_mode="offline",
-                ))
+            if aligned is not None:
+                # Pyannote path: aligned is List[Segment], apply role mapping
+                segments_to_insert = []
+                for seg in aligned:
+                    info = speaker_map.get(seg.speaker_raw, {"display": seg.speaker_raw, "role_base": "PATIENT"})
+                    seg.speaker_raw = info["display"]
+                    seg.speaker_role = info["role_base"]
+                    segments_to_insert.append(seg)
+            else:
+                # AssemblyAI path: build from utterances
+                segments_to_insert = []
+                for utt in utterances:
+                    spk = utt["speaker"]
+                    info = speaker_map.get(spk, {"display": f"SPEAKER_{spk}", "role_base": "PATIENT"})
+                    segments_to_insert.append(Segment(
+                        interview_id=interview_id,
+                        segment_id=str(uuid.uuid4())[:8],
+                        start_ms=utt["start_ms"],
+                        end_ms=utt["end_ms"],
+                        speaker_raw=info["display"],
+                        speaker_role=info["role_base"],
+                        text=utt["text"],
+                        source_mode="offline",
+                    ))
 
             count = db.insert_segments(segments_to_insert)
             role_map = {info["display"]: info["role_base"] for info in speaker_map.values()}
             db.update_interview_speaker_map(interview_id, role_map)
-            # ── Step D: Generate Embeddings ──
-            if config.ENV.get("has_embeddings", False):
+
+            # ── 7. Generate Embeddings (local only) ──
+            if config.ENV["has_embeddings"]:
                 st.write("Generating **semantic embeddings** (384-dim MiniLM)...")
                 try:
                     from retrieval.embeddings import embed_and_store_segments
@@ -328,23 +396,77 @@ if uploaded_file and st.button("Run Offline Pipeline", type="primary", use_conta
                 st.write("Embeddings skipped (sentence-transformers not available).")
 
             st.session_state.processing_complete = True
-            status.update(label=f"Complete — {count} segments saved!", state="complete")
+            status.update(
+                label=f"Complete — {count} segments saved via {diar_backend}!",
+                state="complete",
+            )
 
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
 # ══════════════════════════════════════════
-# Step 4: View Results
+# Step 4: Results — Timeline + Transcript
 # ══════════════════════════════════════════
 if st.session_state.processing_complete:
-    st.subheader("Interview Transcript")
-    from database.supabase_client import SupabaseClient
+    st.markdown(f"<h3 style='color:{config.BRAND_TEXT};'>Interview Results</h3>", unsafe_allow_html=True)
 
+    from database.supabase_client import SupabaseClient
     db = SupabaseClient()
     segments = db.get_segments(st.session_state.interview_id)
 
     if segments:
+        # ── Speaker Timeline Visualization ──
+        st.markdown(f"<small style='color:{config.BRAND_MUTED};font-weight:600;letter-spacing:1px;'>SPEAKER TIMELINE</small>", unsafe_allow_html=True)
+
+        # Build timeline data
+        total_duration = max(s.get("end_ms", 0) for s in segments) or 1
+        timeline_html = '<div style="display:flex;height:32px;border-radius:6px;overflow:hidden;margin:0.5rem 0 1rem 0;border:1px solid #30363D;">'
+        for seg in segments:
+            start = seg.get("start_ms", 0)
+            end = seg.get("end_ms", 0)
+            width_pct = max(((end - start) / total_duration) * 100, 0.3)
+            role = seg.get("speaker_role", "UNKNOWN")
+            color = config.PATIENT_COLOR if role == "PATIENT" else config.CLINICIAN_COLOR
+            raw = seg.get("speaker_raw", "")
+            timeline_html += (
+                f'<div style="width:{width_pct}%;background:{color};opacity:0.7;" '
+                f'title="{raw}: {start//1000}s-{end//1000}s"></div>'
+            )
+        timeline_html += '</div>'
+
+        # Legend
+        timeline_html += (
+            f'<div style="display:flex;gap:1.5rem;font-size:0.8rem;color:{config.BRAND_MUTED};">'
+            f'<span><span style="color:{config.PATIENT_COLOR};">●</span> Patient</span>'
+            f'<span><span style="color:{config.CLINICIAN_COLOR};">●</span> Clinician</span>'
+            f'<span>Duration: {total_duration // 60000}:{(total_duration % 60000) // 1000:02d}</span>'
+            f'</div>'
+        )
+        st.markdown(timeline_html, unsafe_allow_html=True)
+
+        st.write("")
+
+        # ── Speaker Summary ──
+        unique_raw = sorted(set(s.get("speaker_raw", "") for s in segments))
+        p_count = sum(1 for s in segments if s["speaker_role"] == "PATIENT")
+        c_count = sum(1 for s in segments if s["speaker_role"] == "CLINICIAN")
+
+        cols = st.columns(4)
+        with cols[0]:
+            st.metric("Total Segments", len(segments))
+        with cols[1]:
+            st.metric("Patient Segments", p_count)
+        with cols[2]:
+            st.metric("Clinician Segments", c_count)
+        with cols[3]:
+            st.metric("Speakers Identified", len(unique_raw))
+
+        st.write("")
+
+        # ── Full Transcript ──
+        st.markdown(f"<small style='color:{config.BRAND_MUTED};font-weight:600;letter-spacing:1px;'>TRANSCRIPT</small>", unsafe_allow_html=True)
+
         for seg in segments:
             role = seg.get("speaker_role", "UNKNOWN")
             raw = seg.get("speaker_raw", role)
@@ -357,21 +479,20 @@ if st.session_state.processing_complete:
             )
 
             if role == "PATIENT":
-                color, border = "#f0fff4", "#38a169"
+                bg, border = config.PATIENT_BG, config.PATIENT_COLOR
             else:
-                color, border = "#ebf8ff", "#3182ce"
+                bg, border = config.CLINICIAN_BG, config.CLINICIAN_COLOR
 
             st.markdown(
-                f'<div style="background-color:{color};border-left:4px solid {border};'
-                f'padding:0.5rem 1rem;margin:0.3rem 0;border-radius:0 4px 4px 0;">'
-                f'<strong>{raw}</strong> <small>({time_str})</small><br>{text}</div>',
+                f'<div style="background-color:{bg};border-left:4px solid {border};'
+                f'padding:0.6rem 1rem;margin:0.3rem 0;border-radius:0 8px 8px 0;">'
+                f'<strong style="color:{border};">{raw}</strong> '
+                f'<small style="color:{config.BRAND_MUTED};">({time_str})</small>'
+                f'<br><span style="color:{config.BRAND_TEXT};">{text}</span></div>',
                 unsafe_allow_html=True,
             )
 
         st.divider()
-        p_count = sum(1 for s in segments if s["speaker_role"] == "PATIENT")
-        c_count = sum(1 for s in segments if s["speaker_role"] == "CLINICIAN")
-        unique_raw = sorted(set(s.get("speaker_raw", "") for s in segments))
         st.success(
             f"Total: {len(segments)} segments — Patient: {p_count} / Clinician: {c_count} — "
             f"Speakers: {', '.join(unique_raw)}"
