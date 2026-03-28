@@ -35,19 +35,19 @@ def _detect_environment():
     try:
         import torch
         has_gpu = torch.cuda.is_available()
-    except ImportError:
+    except Exception:
         has_gpu = False
 
     try:
         from sentence_transformers import SentenceTransformer
         has_embeddings = True
-    except ImportError:
+    except Exception:
         has_embeddings = False
 
     try:
         from pyannote.audio import Pipeline
         has_pyannote = True
-    except ImportError:
+    except Exception:
         has_pyannote = False
 
     return {

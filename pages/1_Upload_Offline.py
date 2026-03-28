@@ -38,9 +38,7 @@ diar_label = config.DIARIZATION_PRIMARY.title()
 methods = ", ".join(config.SEARCH_METHODS)
 st.caption(f"Diarization: **{diar_label}** · Search: **{methods}** · Embeddings: **{'Active' if config.ENV['has_embeddings'] else 'Off'}**")
 
-# ══════════════════════════════════════════
 # Session State
-# ══════════════════════════════════════════
 for key in ["interview_id", "aligned_segments", "speakers_detected", "diar_result"]:
     if key not in st.session_state:
         st.session_state[key] = None if key != "speakers_detected" else []
@@ -48,9 +46,7 @@ if "processing_complete" not in st.session_state:
     st.session_state.processing_complete = False
 
 
-# ══════════════════════════════════════════
 # LLM role labeling (reused from cloud version)
-# ══════════════════════════════════════════
 def label_roles_with_llm(utterances):
     """
     Takes acoustically-separated utterances (Speaker A/B/C or SPEAKER_00/01)
@@ -131,10 +127,7 @@ No other text. Just the JSON array."""
 
     return speaker_map
 
-
-# ══════════════════════════════════════════
 # Step 1: Patient Profile (text + voice)
-# ══════════════════════════════════════════
 st.markdown(f"<h3 style='color:{config.BRAND_TEXT};'>Step 1: Patient Profile</h3>", unsafe_allow_html=True)
 st.caption("Provide context before processing. Supports text entry or voice input via Whisper.")
 
@@ -190,9 +183,7 @@ with st.expander("Enter Patient Profile (Optional)", expanded=False):
             medical_history = st.session_state.get("voice_profile_text", "")
             input_method = "voice"
 
-# ══════════════════════════════════════════
 # Step 2: Upload Audio
-# ══════════════════════════════════════════
 st.markdown(f"<h3 style='color:{config.BRAND_TEXT};'>Step 2: Upload Interview Audio</h3>", unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader(
@@ -208,9 +199,7 @@ if uploaded_file:
     if file_size_mb > config.MAX_AUDIO_SIZE_MB:
         st.error(f"File exceeds {config.MAX_AUDIO_SIZE_MB} MB limit.")
 
-# ══════════════════════════════════════════
 # Step 3: Process
-# ══════════════════════════════════════════
 st.markdown(f"<h3 style='color:{config.BRAND_TEXT};'>Step 3: Process Interview</h3>", unsafe_allow_html=True)
 
 if uploaded_file and st.button("Run Offline Pipeline", type="primary", use_container_width=True):
@@ -398,9 +387,7 @@ if uploaded_file and st.button("Run Offline Pipeline", type="primary", use_conta
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
-# ══════════════════════════════════════════
 # Step 4: Results — Timeline + Transcript
-# ══════════════════════════════════════════
 if st.session_state.processing_complete:
     st.markdown(f"<h3 style='color:{config.BRAND_TEXT};'>Interview Results</h3>", unsafe_allow_html=True)
 

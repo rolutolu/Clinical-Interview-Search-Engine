@@ -14,7 +14,48 @@ Research-grade retrieval evaluation with:
 import streamlit as st
 import pandas as pd
 import json
+import re
 import config
+
+
+def _parse_llm_segment_ids(content: str, valid_ids: set) -> list:
+    """
+    Robustly extract segment IDs from LLM response.
+    Uses multiple fallback strategies and validates against actual DB IDs.
+    """
+    cleaned = content.strip()
+
+    # Strip markdown code blocks (```json ... ``` or ``` ... ```)
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+
+    # Strategy 1: Direct JSON parse
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, list):
+            ids = [str(x).strip() for x in parsed]
+            return [sid for sid in ids if sid in valid_ids]
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Strategy 2: Regex — find first JSON array in the response
+    match = re.search(r'\[([^\]]*?)\]', content)
+    if match:
+        try:
+            parsed = json.loads(match.group(0))
+            if isinstance(parsed, list):
+                ids = [str(x).strip() for x in parsed]
+                return [sid for sid in ids if sid in valid_ids]
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # Strategy 3: Find any quoted strings that match valid segment IDs
+    found = re.findall(r'["\']([a-f0-9\-]{4,})["\']', content)
+    return [sid for sid in found if sid in valid_ids]
+
 
 st.set_page_config(page_title="Evaluation", page_icon="📊", layout="wide")
 
@@ -28,9 +69,8 @@ st.markdown(
 )
 st.caption("P@K · R@K · F1@K · nDCG@K · MRR · MAP — across speaker-aware retrieval modes")
 
-# ══════════════════════════════════════════
+
 # Database + Interview Selection
-# ══════════════════════════════════════════
 try:
     from database.supabase_client import SupabaseClient
     db = SupabaseClient()
@@ -81,9 +121,7 @@ else:
     st.success("Embeddings detected — semantic and hybrid search are fully active.")
 st.divider()
 
-# ══════════════════════════════════════════
 # Step 1: Relevance Labels
-# ══════════════════════════════════════════
 st.markdown(f"<h3 style='color:{config.BRAND_TEXT};'>Step 1: Evaluation Labels</h3>", unsafe_allow_html=True)
 st.caption("LLM-as-Judge generates ground truth relevance labels for test queries.")
 
@@ -160,6 +198,8 @@ SEGMENTS:
 Respond with ONLY a JSON array of relevant segment IDs: ["id1", "id2"]
 If none are relevant: []"""
 
+            valid_ids = {s.get("segment_id", "") for s in mode_segments}
+
             try:
                 response = httpx.post(
                     "https://api.groq.com/openai/v1/chat/completions",
@@ -169,15 +209,9 @@ If none are relevant: []"""
                 )
                 response.raise_for_status()
                 content = response.json()["choices"][0]["message"]["content"].strip()
-                if content.startswith("```"):
-                    content = content.split("\n", 1)[1]
-                    if content.endswith("```"):
-                        content = content[:-3]
-                    content = content.strip()
-                relevant_ids = json.loads(content)
-                if not isinstance(relevant_ids, list):
-                    relevant_ids = []
-            except Exception:
+                relevant_ids = _parse_llm_segment_ids(content, valid_ids)
+            except Exception as e:
+                st.caption(f"⚠️ LLM label generation failed for {q['query_id']}: {e}")
                 relevant_ids = []
 
             all_labels.append({**q, "relevant_segment_ids": relevant_ids})
@@ -204,9 +238,7 @@ with tab_manual:
         except Exception as e:
             st.error(f"Parse failed: {e}")
 
-# ══════════════════════════════════════════
 # Step 2: Run Evaluation
-# ══════════════════════════════════════════
 st.divider()
 st.markdown(f"<h3 style='color:{config.BRAND_TEXT};'>Step 2: Run Evaluation</h3>", unsafe_allow_html=True)
 
@@ -285,9 +317,7 @@ elif st.button("Run Evaluation", type="primary", use_container_width=True):
                 if mode_results:
                     all_results[method][mode_display[mode]] = mode_results
 
-        # ══════════════════════════════════════════
         # Display Results
-        # ══════════════════════════════════════════
         st.markdown(f"<h3 style='color:{config.BRAND_TEXT};'>Results</h3>", unsafe_allow_html=True)
 
         if not all_results:
@@ -385,9 +415,7 @@ elif st.button("Run Evaluation", type="primary", use_container_width=True):
                     mime="text/csv",
                 )
 
-# ══════════════════════════════════════════
 # Step 3: Save & Export
-# ══════════════════════════════════════════
 st.divider()
 st.markdown(f"<h3 style='color:{config.BRAND_TEXT};'>Step 3: Export</h3>", unsafe_allow_html=True)
 

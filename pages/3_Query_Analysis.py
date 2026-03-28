@@ -34,9 +34,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ══════════════════════════════════════════
 # Interview Selection
-# ══════════════════════════════════════════
 try:
     from database.supabase_client import SupabaseClient
     db = SupabaseClient()
@@ -80,9 +78,7 @@ if not _has_embeddings and len(config.SEARCH_METHODS) > 1:
             except Exception as e:
                 st.error(f"Failed: {e}")
 
-# ══════════════════════════════════════════
 # Retrieval Controls
-# ══════════════════════════════════════════
 st.markdown(f"<small style='color:{config.BRAND_MUTED};font-weight:600;letter-spacing:1px;'>RETRIEVAL SETTINGS</small>", unsafe_allow_html=True)
 
 col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
@@ -112,9 +108,7 @@ with col4:
 
 st.divider()
 
-# ══════════════════════════════════════════
 # Helper: search with current settings
-# ══════════════════════════════════════════
 def run_search(query, k_override=None):
     """Execute search with current control settings."""
     from retrieval.search import search
@@ -138,9 +132,7 @@ def run_search(query, k_override=None):
     return results
 
 
-# ══════════════════════════════════════════
 # Helper: display segments with dark theme
-# ══════════════════════════════════════════
 def display_segments(segments, title="Retrieved Segments"):
     """Render segments with color-coded speaker labels in dark theme."""
     if not segments:
@@ -187,9 +179,7 @@ def display_segments(segments, title="Retrieved Segments"):
             )
 
 
-# ══════════════════════════════════════════
 # Three Analysis Tabs
-# ══════════════════════════════════════════
 tab_summary, tab_qa, tab_analyzer = st.tabs([
     "📝 Summarization",
     "❓ Symptom QA",
