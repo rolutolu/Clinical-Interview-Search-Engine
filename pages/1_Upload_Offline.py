@@ -478,3 +478,71 @@ if st.session_state.processing_complete:
             f"Speakers: {', '.join(unique_raw)}"
         )
         st.info("Go to **Query Analysis** to search and analyze this interview.")
+
+# Manage Existing Interviews
+st.divider()
+st.subheader("Manage Existing Interviews")
+with st.expander("View, Edit, and Delete Records", expanded=False):
+    from database.supabase_client import SupabaseClient
+    db = SupabaseClient()
+    all_ivs = db.list_interviews()
+
+    if all_ivs:
+        for iv in all_ivs:
+            iv_id = iv['interview_id']
+            with st.container(border=True):
+                c1, c2, c3 = st.columns([3, 1, 1], vertical_alignment="center")
+                with c1:
+                    st.write(f"**{iv['title']}**")
+                    st.caption(f"ID: `{iv_id}` | Created: {iv['created_at'][:16].replace('T', ' ')}")
+
+                with c2:
+                    if st.button("👥 Edit Roles", key=f"edit_{iv_id}", use_container_width=True):
+                        st.session_state[f"editing_roles_{iv_id}"] = not st.session_state.get(f"editing_roles_{iv_id}", False)
+
+                with c3:
+                    if st.button("🗑️ Delete", key=f"del_{iv_id}", use_container_width=True):
+                        if db.delete_interview(iv_id):
+                            st.success("Deleted!")
+                            if st.session_state.get('interview_id') == iv_id:
+                                st.session_state.interview_id = None
+                                st.session_state.processing_complete = False
+                            st.rerun()
+                        else:
+                            st.error("Delete failed.")
+
+                if st.session_state.get(f"editing_roles_{iv_id}", False):
+                    st.markdown("##### 👥 Edit Speaker Roles")
+                    current_map = iv.get("speaker_map", {})
+
+                    if not current_map:
+                        st.info("No speaker map found for this interview.")
+                    else:
+                        st.write("Modify the patient and clinician assignments below:")
+                        new_map = {}
+                        map_cols = st.columns(min(len(current_map), 4))
+                        for i, (speaker, current_role) in enumerate(current_map.items()):
+                            with map_cols[i % len(map_cols)]:
+                                new_map[speaker] = st.selectbox(
+                                    f"Role for {speaker}",
+                                    config.SPEAKER_ROLES,
+                                    index=config.SPEAKER_ROLES.index(current_role) if current_role in config.SPEAKER_ROLES else 0,
+                                    key=f"remap_{iv_id}_{speaker}"
+                                )
+
+                        c_save, c_cancel = st.columns([1, 1])
+                        with c_save:
+                            if st.button("Save Roles", type="primary", key=f"save_roles_{iv_id}", use_container_width=True):
+                                seg_count = db.get_segment_count(iv_id)
+                                db.update_interview_speaker_map(iv_id, new_map)
+                                db.update_segment_roles(iv_id, new_map)
+                                st.success(f"Roles updated for {seg_count} segments!")
+                                st.session_state[f"editing_roles_{iv_id}"] = False
+                                st.rerun()
+                        with c_cancel:
+                            if st.button("Cancel", key=f"cancel_roles_{iv_id}", use_container_width=True):
+                                st.session_state[f"editing_roles_{iv_id}"] = False
+                                st.rerun()
+    else:
+        st.write("No interviews found in the database.")
+
