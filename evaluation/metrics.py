@@ -5,32 +5,31 @@ Required by rubric:
     - Precision@K
     - Recall@K
     - Reported for: overall, patient-only, clinician-only
-    - Multiple K values: 1, 3, 5, 10
+    - Multiple K values
 
-Owner: Tolu (M3) — validate, extend with additional metrics if desired.
+Above and beyond:
+    - F1@K (harmonic mean of P@K and R@K)
+    - nDCG@K (Normalized Discounted Cumulative Gain)
+    - MRR (Mean Reciprocal Rank)
+    - MAP (Mean Average Precision)
 
-INTERFACE CONTRACT:
-    precision_at_k(retrieved_ids, relevant_ids, k) -> float
-    recall_at_k(retrieved_ids, relevant_ids, k) -> float
-    run_evaluation(eval_labels, search_fn) -> dict   # full evaluation report
+Research basis:
+    - Manning et al. 2008: IR evaluation metrics
+    - Jarvelin & Kekalainen 2002: nDCG
+    - Voorhees 1999: TREC evaluation methodology
 """
 
 from typing import List, Dict, Callable
+import math
 import config
 
 
+# ═══════════════════════════════════════════
+# Core Metrics (required)
+# ═══════════════════════════════════════════
+
 def precision_at_k(retrieved_ids: List[str], relevant_ids: List[str], k: int) -> float:
-    """
-    Precision@K: Of the top K retrieved results, what fraction are relevant?
-
-    Args:
-        retrieved_ids: Ordered list of retrieved segment IDs (by rank)
-        relevant_ids: Set of truly relevant segment IDs for the query
-        k: Cut-off rank
-
-    Returns:
-        Float in [0.0, 1.0]
-    """
+    """Precision@K: fraction of top-K results that are relevant."""
     if k <= 0:
         return 0.0
     top_k = retrieved_ids[:k]
@@ -42,17 +41,7 @@ def precision_at_k(retrieved_ids: List[str], relevant_ids: List[str], k: int) ->
 
 
 def recall_at_k(retrieved_ids: List[str], relevant_ids: List[str], k: int) -> float:
-    """
-    Recall@K: Of all relevant segments, what fraction appear in the top K?
-
-    Args:
-        retrieved_ids: Ordered list of retrieved segment IDs (by rank)
-        relevant_ids: Set of truly relevant segment IDs for the query
-        k: Cut-off rank
-
-    Returns:
-        Float in [0.0, 1.0]
-    """
+    """Recall@K: fraction of all relevant documents found in top-K."""
     if not relevant_ids:
         return 0.0
     top_k = set(retrieved_ids[:k])
@@ -61,70 +50,114 @@ def recall_at_k(retrieved_ids: List[str], relevant_ids: List[str], k: int) -> fl
     return hits / len(relevant_set)
 
 
-def run_evaluation(
-    eval_labels: List[Dict],
-    search_fn: Callable,
-    k_values: List[int] = None,
-    interview_id: str = None,
-) -> Dict:
+# ═══════════════════════════════════════════
+# Extended Metrics (above and beyond)
+# ═══════════════════════════════════════════
+
+def f1_at_k(retrieved_ids: List[str], relevant_ids: List[str], k: int) -> float:
+    """F1@K: harmonic mean of Precision@K and Recall@K."""
+    p = precision_at_k(retrieved_ids, relevant_ids, k)
+    r = recall_at_k(retrieved_ids, relevant_ids, k)
+    if p + r == 0:
+        return 0.0
+    return 2 * (p * r) / (p + r)
+
+
+def ndcg_at_k(retrieved_ids: List[str], relevant_ids: List[str], k: int) -> float:
     """
-    Run full evaluation across all queries, modes, and K values.
+    Normalized Discounted Cumulative Gain @ K.
 
-    Args:
-        eval_labels: List of dicts with query_id, query_text, relevant_segment_ids, retrieval_mode
-        search_fn: Function with signature search(query, interview_id, mode, k) -> List[dict]
-        k_values: List of K values to test (default: config.K_VALUES)
-        interview_id: Interview to evaluate against
+    Uses binary relevance (1 if relevant, 0 if not).
+    DCG = sum(rel_i / log2(i+2)) for i in 0..k-1
+    IDCG = same formula for ideal ranking (all relevant first)
 
-    Returns:
-        Dict with structure:
-        {
-            "overall": {1: {"precision": 0.8, "recall": 0.6}, 3: {...}, ...},
-            "patient": {1: {...}, ...},
-            "clinician": {1: {...}, ...},
-        }
+    Reference: Jarvelin & Kekalainen, 2002
     """
-    if k_values is None:
-        k_values = config.K_VALUES
+    if not relevant_ids or k <= 0:
+        return 0.0
 
-    # Group labels by mode
-    by_mode = {"combined": [], "patient": [], "clinician": []}
-    for label in eval_labels:
-        mode = label.get("retrieval_mode", "combined")
-        by_mode[mode].append(label)
+    relevant_set = set(relevant_ids)
+    top_k = retrieved_ids[:k]
 
-    results = {}
-    mode_name_map = {"combined": "overall", "patient": "patient", "clinician": "clinician"}
+    # DCG: actual ranking
+    dcg = 0.0
+    for i, sid in enumerate(top_k):
+        rel = 1.0 if sid in relevant_set else 0.0
+        dcg += rel / math.log2(i + 2)  # i+2 because log2(1)=0
 
-    for mode, labels in by_mode.items():
-        if not labels:
-            continue
-        mode_results = {}
-        for k in k_values:
-            precisions = []
-            recalls = []
-            for label in labels:
-                query = label["query_text"]
-                relevant = label["relevant_segment_ids"]
+    # IDCG: ideal ranking (all relevant docs at the top)
+    n_relevant_in_k = min(len(relevant_ids), k)
+    idcg = 0.0
+    for i in range(n_relevant_in_k):
+        idcg += 1.0 / math.log2(i + 2)
 
-                # Run search
-                search_results = search_fn(
-                    query=query,
-                    interview_id=interview_id or "",
-                    mode=mode,
-                    k=k,
-                )
-                retrieved = [r["segment_id"] for r in search_results]
+    if idcg == 0:
+        return 0.0
+    return dcg / idcg
 
-                precisions.append(precision_at_k(retrieved, relevant, k))
-                recalls.append(recall_at_k(retrieved, relevant, k))
 
-            mode_results[k] = {
-                "precision": sum(precisions) / len(precisions) if precisions else 0.0,
-                "recall": sum(recalls) / len(recalls) if recalls else 0.0,
-                "num_queries": len(labels),
-            }
+def reciprocal_rank(retrieved_ids: List[str], relevant_ids: List[str]) -> float:
+    """
+    Reciprocal Rank: 1/rank of the first relevant result.
+    Used to compute MRR across queries.
+    """
+    relevant_set = set(relevant_ids)
+    for i, sid in enumerate(retrieved_ids):
+        if sid in relevant_set:
+            return 1.0 / (i + 1)
+    return 0.0
 
-        results[mode_name_map[mode]] = mode_results
 
-    return results
+def average_precision(retrieved_ids: List[str], relevant_ids: List[str]) -> float:
+    """
+    Average Precision for a single query.
+    AP = (1/|R|) * sum(P@k * rel(k)) for k=1..n
+
+    Used to compute MAP across queries.
+    Reference: Manning et al. 2008
+    """
+    if not relevant_ids:
+        return 0.0
+    relevant_set = set(relevant_ids)
+    hits = 0
+    sum_precision = 0.0
+    for i, sid in enumerate(retrieved_ids):
+        if sid in relevant_set:
+            hits += 1
+            sum_precision += hits / (i + 1)
+    return sum_precision / len(relevant_set)
+
+
+# ═══════════════════════════════════════════
+# Aggregate computation
+# ═══════════════════════════════════════════
+
+def compute_all_metrics(
+    retrieved_ids: List[str],
+    relevant_ids: List[str],
+    k: int,
+) -> Dict[str, float]:
+    """Compute all metrics for a single query at a given K."""
+    return {
+        "precision": precision_at_k(retrieved_ids, relevant_ids, k),
+        "recall": recall_at_k(retrieved_ids, relevant_ids, k),
+        "f1": f1_at_k(retrieved_ids, relevant_ids, k),
+        "ndcg": ndcg_at_k(retrieved_ids, relevant_ids, k),
+        "mrr": reciprocal_rank(retrieved_ids[:k], relevant_ids),
+        "ap": average_precision(retrieved_ids[:k], relevant_ids),
+    }
+
+
+def aggregate_metrics(per_query_metrics: List[Dict[str, float]]) -> Dict[str, float]:
+    """Average metrics across multiple queries."""
+    if not per_query_metrics:
+        return {m: 0.0 for m in ["precision", "recall", "f1", "ndcg", "mrr", "map"]}
+
+    n = len(per_query_metrics)
+    agg = {}
+    for key in ["precision", "recall", "f1", "ndcg", "mrr"]:
+        agg[key] = sum(m.get(key, 0.0) for m in per_query_metrics) / n
+    # MAP = mean of AP
+    agg["map"] = sum(m.get("ap", 0.0) for m in per_query_metrics) / n
+    agg["num_queries"] = n
+    return agg
