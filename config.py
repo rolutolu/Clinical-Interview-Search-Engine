@@ -10,6 +10,17 @@ Supports two deployment modes:
 import os
 from dotenv import load_dotenv
 
+# ═══════════════════════════════════════════
+# Compatibility Patches
+# ═══════════════════════════════════════════
+try:
+    # Patch torchaudio for Pyannote compatibility (newer torchaudio removed set_audio_backend)
+    import torchaudio
+    if not hasattr(torchaudio, "set_audio_backend"):
+         torchaudio.set_audio_backend = lambda x: None
+except ImportError:
+    pass
+
 load_dotenv()
 
 

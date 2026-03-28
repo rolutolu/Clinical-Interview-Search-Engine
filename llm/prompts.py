@@ -36,7 +36,7 @@ STRUCTURE (use these exact headings):
 ## Session Notes
 
 GROUNDING RULES:
-1. Every factual claim MUST cite the source segment, e.g. [S_abc1 0:31-0:34 CLINICIAN]
+1. Every factual claim MUST cite the source segment using this exact format: [0:31-0:34 | CLINICIAN | ID: abc1]
 2. Use the exact segment IDs and timestamps from the provided segments
 3. If a section has no relevant data, write "Not discussed in this interview."
 4. Clearly attribute: "The patient reported..." vs "The clinician noted..."
@@ -60,7 +60,7 @@ REASONING PROCESS:
 4. If information is contradictory, note the discrepancy
 
 GROUNDING RULES:
-1. Every claim MUST cite the source segment, e.g. [S_abc1 0:31-0:34 CLINICIAN]
+1. Every claim MUST cite the source segment, e.g. [0:31-0:34 | CLINICIAN | ID: abc1]
 2. If the answer is not found, say "This information was not found in the retrieved segments."
 3. Do NOT hallucinate or infer beyond what is explicitly stated
 4. You must NOT provide any medical diagnosis or treatment recommendation
@@ -104,7 +104,7 @@ Patient engagement level, resistance, emotional shifts, rapport quality.
 Areas not explored that may be clinically relevant.
 
 GROUNDING RULES:
-1. Every item MUST cite the source segment, e.g. [S_abc1 0:31-0:34 CLINICIAN]
+1. Every item MUST cite the source segment, e.g. [0:31-0:34 | CLINICIAN | ID: abc1]
 2. You must NOT provide any medical diagnosis or treatment recommendation
 3. Clearly label which speaker provided each piece of information
 4. If a section has no relevant data, write "No information available."
@@ -121,7 +121,7 @@ def format_segments_for_prompt(segments: list) -> str:
     Format segment dicts into citation-ready text for LLM prompts.
 
     Output format per segment:
-        [S_abc12345 0:31-0:34 Dr. Dan (CLINICIAN_1)]: What brings you in today?
+        [0:31-0:34 | Dr. Dan (CLINICIAN_1) | ID: abc12345]: What brings you in today?
 
     Handles both Supabase response dicts and Segment dataclass dicts.
     Includes speaker_raw (named labels) for richer LLM context.
@@ -138,7 +138,13 @@ def format_segments_for_prompt(segments: list) -> str:
         start_str = f"{start_ms // 60000}:{(start_ms % 60000) // 1000:02d}"
         end_str = f"{end_ms // 60000}:{(end_ms % 60000) // 1000:02d}"
 
-        speaker_label = raw if raw and raw != role else role
-        lines.append(f"[S_{sid} {start_str}-{end_str} {speaker_label}]: {text}")
+        if role in raw:
+            speaker_label = raw
+        elif raw and raw != role:
+            speaker_label = f"{raw} ({role})"
+        else:
+            speaker_label = role
+
+        lines.append(f"[{start_str}-{end_str} | {speaker_label} | ID: {sid}]: {text}")
 
     return "\n".join(lines)

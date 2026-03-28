@@ -1,0 +1,39 @@
+# ═══════════════════════════════════════════
+# Clinical Interview IR System — Full Development Dependencies
+# ═══════════════════════════════════════════
+# This file includes all libraries for full local GPU/Colab development.
+# Use this when you need pyannote diarization, semantic search, and torch.
+#
+# Usage:
+#   pip install -r requirements-full.txt
+# ═══════════════════════════════════════════
+
+# ── Import Base Requirements ──
+-r requirements.txt
+
+# ── Machine Learning Core (PyTorch) ──
+# Pinned to 2.0.x — pyannote 3.1.1 requires torchaudio.set_audio_backend / get_audio_backend
+# which were removed in torchaudio 2.1+
+torch==2.0.1
+torchaudio==2.0.2
+torchvision>=0.15.0,<0.16.0
+
+# ── Retrieval & Embeddings (Semantic/Hybrid) ──
+sentence-transformers>=2.2.2
+huggingface-hub>=0.20.0
+transformers>=4.38.0
+
+# ── Speaker Diarization (Acoustic Pipeline) ──
+pyannote.audio==3.1.1
+
+# ── Numerical Utilities (Critical Versions) ──
+numpy>=1.24.0,<2.0.0
+protobuf>=3.20,<5.0.0
+
+# ── Development Tools ──
+ipython>=8.12.0
+tqdm>=4.65.0
+
+# ── LiveKit ──
+livekit>=0.11.0
+livekit-api>=0.5.0
